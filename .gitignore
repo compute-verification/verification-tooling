@@ -1,6 +1,7 @@
 # Python artifacts
 __pycache__/
 *.py[cod]
+.pytest_cache/
 
 # uv / virtualenv (uv.lock IS committed; the env is not)
 .venv/
@@ -8,6 +9,9 @@ __pycache__/
 # CI artifacts
 .ci-results/
 scripts/ci/d6_artifacts/
+target/
+.pocomp/
+*.opening
 
 # Editor temp files
 *.swp

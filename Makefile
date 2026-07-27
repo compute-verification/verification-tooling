@@ -1,45 +1,20 @@
-.PHONY: lint schema test-fast test-full test-nightly test-release ci-pr ci-main ci-nightly ci-release build-libnetdet lint-proverdet typecheck-proverdet test-proverdet
+.PHONY: test lint check sp1 zktorch
+
+test:
+	cargo test --workspace
+	python -m pytest -q
 
 lint:
-	bash scripts/ci/lint.sh
+	cargo fmt --all -- --check
+	cargo clippy --workspace --all-targets -- -D warnings
+	python -m py_compile ops/*.py
 
-schema:
-	bash scripts/ci/schema_gate.sh
+check: lint test
 
-test-fast:
-	bash scripts/ci/test_fast.sh
+sp1:
+	cargo build --release --manifest-path proofs/sp1/Cargo.toml -p pocomp-sp1
 
-test-full:
-	bash scripts/ci/test_full.sh
-
-test-nightly:
-	bash scripts/ci/test_nightly.sh
-
-test-release:
-	bash scripts/ci/test_release.sh
-
-ci-pr: lint schema test-fast
-
-ci-main: lint schema test-full
-
-ci-nightly: lint schema test-nightly
-
-ci-release: lint schema test-release
-
-build-libnetdet:
-	cd modules/network/native/libnetdet && make
-
-# Scoped tooling for the prover-verifier demo (demos/prover-verifier).
-# Keeps the existing tree's looser conventions intact while letting the new code
-# sit under stricter ruff + pyright. Edit ruff.toml / pyrightconfig.json under
-# demos/prover-verifier/ to tune.
-PROVERDET_PATHS := modules/attestation/proverdet modules/attestation/prover modules/attestation/verifier_server modules/attestation/verifier_cli
-
-lint-proverdet:
-	bash scripts/ci/run_proverdet_lint.sh
-
-typecheck-proverdet:
-	bash scripts/ci/run_proverdet_typecheck.sh
-
-test-proverdet:
-	bash scripts/ci/run_proverdet_tests.sh
+zktorch:
+	cargo +nightly-2025-06-30 build --release --manifest-path third_party/zk-torch/Cargo.toml \
+		--bin zk_torch --bin pocomp_admit --bin pocomp_verify \
+		--bin pocomp_sanitize_onnx --bin pocomp_infer

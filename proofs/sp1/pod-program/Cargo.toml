@@ -1,0 +1,10 @@
+[package]
+name = "pocomp-pod-program"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+pocomp-protocol.workspace = true
+sp1-zkvm.workspace = true

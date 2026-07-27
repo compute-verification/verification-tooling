@@ -1,0 +1,12 @@
+target
+Cargo.lock
+.DS_Store
+*.swp
+inputsEnc
+modelsEnc
+outputsEnc
+proofs
+setups
+models
+acc_proofs
+final_proofs

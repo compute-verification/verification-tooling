@@ -1,0 +1,20 @@
+[package]
+name = "pocomp-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+pocomp-protocol = { path = "../pocomp-protocol" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

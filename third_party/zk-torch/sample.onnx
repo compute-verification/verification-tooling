@@ -1,0 +1,27 @@
+pytorch2.2.2:Î
+E
+input
+onnx::MatMul_13/lin1/MatMul_output_0/lin1/MatMul"MatMul
+F
+	lin1.bias
+/lin1/MatMul_output_0/lin1/Add_output_0	/lin1/Add"Add
+;
+/lin1/Add_output_0/relu/Relu_output_0
+/relu/Relu"Relu
+S
+/relu/Relu_output_0
+onnx::MatMul_14/lin2/MatMul_output_0/lin2/MatMul"MatMul
+F
+	lin2.bias
+/lin2/MatMul_output_0/lin2/Add_output_0	/lin2/Add"Add
+0
+/lin2/Add_output_0output/relu_1/Relu"Relu
+main_graph*!B	lin1.biasJÈé½¾œƒü¾Ğ¾i¡½*!B	lin2.biasJn®¾€â=ô\Ø¾"±Ë>*YBonnx::MatMul_13J@<½`¬ù<zÛá>hê|¾p‘e>Á·=bŞ’>ˆ]ö¾<óõ>D67¾”«>Xb¸=ğæş>ö„¨¾°Y*>¶¡†>*YBonnx::MatMul_14J@‚ñÎ¾Î¿¾Ú²›¾l@¾‹º>øI¾¾€~r¼ `¯<\,ı>ğõ=˜~„=àÔ½¾ >¿´¾zşÎ¾X@›>Z
+input
+
+
+b
+output
+
+
+B

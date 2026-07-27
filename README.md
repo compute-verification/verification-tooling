@@ -1,99 +1,151 @@
-# Deterministic Inference Server
+# PoComp
 
-This repository implements an inference server whose egress traffic is a deterministic function of its ingress traffic. As a result, a verifier can check that the egress traffic is correct by re-executing the inference server's computation. We achieve this primarily through three interventions:
-- The image in which the inference server is run is built deterministically using Nix. As a result, when a verifier re-executes the inference server's computation, it can trust that the image is correct.
-- Inference is made deterministic using batch-invariant kernels, deterministic cuBLAS kernels, eager execution, and greedy decoding with a fixed seed.
-- Tokens are emitted as egress traffic using a custom deterministic userspace TCP/IP stack. 
+This repository implements Pod-PoComp and Task-PoComp from
+[Proofs of Compartmentalization](pocomps.pdf). It provides the protocol types,
+audited ingress/egress gateway, Vast pod lifecycle, zkTorch task proofs, SP1
+relation proofs, and fail-closed bundle verification needed to run the
+documented v1 profile.
 
-These interventions guarantee that egress traffic can be bitwise reproduced on a machine _with the same hardware_ as the machine that originally produced the egress traffic. The current implementation does not enable bitwise reproduction on machines with different accelerators because different accelerators handle floating-point operations differently. In the future we will use [Hawkeye](https://arxiv.org/abs/2603.20421) so that requests can be bitwise reproduced on different hardware. We further demonstrate [proof of secure erasure](https://en.wikipedia.org/wiki/Proof_of_secure_erasure), which can be used to erase covert state on the hardware running the inference server.
+## What is implemented
 
-We have tested the reproducibility of egress traffic when serving several models, including mixture-of-experts models. Across over 5 million tokens and three models, we did not observe a single token or egress bit that could was not bitwise reproduced by the verifier.
+- A versioned Rust protocol with canonical commitments, signed gateway Merkle
+  roots, deterministic task sampling, and native Pod/Task relation evaluators.
+- SP1 guests for the Pod-PoComp and Task-PoComp relations, pinned to SP1
+  `v6.2.2` at commit
+  `150e6294959f40dbc3ba42eb21c8eccc14c95bc5`.
+- A pinned zkTorch fork at commit
+  `63b9c68960f3ca84026d89428dd6d8129e930d53`, with checked curve-point
+  deserialization, persistent model admission, exact quantized tensor
+  handling, CPU proving, and verifier-only execution.
+- A fail-closed audit verifier. Native relation evaluation is a test/debug
+  facility and is never accepted as a cryptographic proof.
+- An external gateway that commits and journals the exact request and response
+  bodies, retains sampled-witness bodies in the auditor domain, enforces one
+  ingress and one egress per task, and signs the epoch Merkle root.
+- A Task-PoComp orchestrator that derives the sampled statement set and
+  generates every sampled zkTorch proof plus the SP1 Task relation proof.
+- Vast pod provisioning and destroy/replace epoch rotation.
 
-Licensed under [Apache-2.0](LICENSE).
+Vast destroy/replace is useful experimental erasure evidence, but it is **not**
+the paper's physical erasure assumption and therefore only produces
+`Experimental` assurance.
 
-### Repository layout
+## Tested status
 
-This repository consists of small _modules_ that implement discrete features. Modules are composed to define _workflows_, which are executable programs that determine what the inference server should run, how traffic should captured, etc. Most workflows will center around sending requests to our custom `/manifest` endpoint, which consumes a JSON file that fully determines how the inference server should behave (e.g. it specifies the vLLM config, a hash of the weights and inputs, etc.).
+The complete Task-PoComp path has been exercised on a fresh Vast instance. The
+test performed a real forward pass through a fixed-shape ONNX model, committed
+the exact input and output through the gateway, generated a zkTorch proof for
+the sampled task, generated the compressed SP1 Task relation proof, and
+independently verified both proofs.
 
-```
-modules/                Each module owns its code, plus shared core/ + Pipeline
-  build/                Hermetic runtime: builder/ + lockfiles/ + nix/   (flake.nix + flake.lock live at root)
-  inference/            Deterministic vLLM
-    server/             Proxy server with POST/GET /manifest endpoint
-    resolver/           Manifest + HF resolution -> lockfile
-    runner/             Manifest + lockfile -> run bundle (mock or vLLM)
-    capture/            Server capture log -> run bundle
-    manifest/           Pydantic manifest model (typed validation)
-    manifests/          Model manifests (Qwen3, Mistral-Large2, DBRX, Llama4-Scout, ... + multinode)
-  network/              networkdet/ (sim TCP/IP frame construction) + native/libnetdet/ (DPDK transmit)
-  attestation/          freivalds/, e2e/, proverdet/ + verifier/ (+ verifier_cli/server) + prover/
-  memory/               PoSE memory wipe + erasure attestation (pose/ sub-package + api.py)
-  utils/                Provisioning / replay helpers (re-exports core/common)
-  core/                 Shared: common/ (canonical JSON, SHA256, schema validation, HF resolution)
-                        + schemas/ (JSON Schema contracts: manifest, lockfile, run_bundle, verify_report, attestation/replay)
-workflows/              Runnable compositions of the modules
-demos/                  End-to-end scenarios: e2e-audit (the scripts/demo.sh path), prover-verifier (the protocol demo). Research experiments live on the `experiments` branch.
-scripts/deploy/         Lambda / vast provisioning (utils-owned)
-tests/conformance/      Spec conformance catalog + release blockers (read by CI)
-flake.nix, flake.lock   Hermetic build entrypoint + pin (at root: src=self packages repo-wide code; callers invoke `.#`)
-```
+For the tested quantized input `[1, 1, 2, 0]`, model execution produced
+`[0, 1, 0, 3]`. See
+[`docs/task-pocomp-test-report-2026-07-27.md`](docs/task-pocomp-test-report-2026-07-27.md)
+for the recorded artifacts, proof sizes, and limitations.
 
-## Build and run
+## Protocol shape
 
-Demonstrating bitwise reproducible egress traffic takes only a few minutes, but building an OCI image with Nix to run the inference server from can take close to an hour. In practice, we find that using the standard CUDA images provided by compute providers does not affect the reproducibility of egress traffic, though it plausibly could. To run the demo without building the image with Nix, bring up any instance with CUDA 12.8 and an NVIDIA GPU that supports batch invariance (e.g. an H100), then run:
+The v1 task profile is deliberately narrow:
 
-```bash
-git clone https://github.com/compute-verification/deterministic-inference-server
-cd deterministic-inference-server
-./scripts/demo.sh
-```
+- fixed-shape quantized ONNX with exactly one input and one output;
+- public architecture, tensor shape/quantization specification, proof metadata,
+  and setup digest;
+- private weights, tensors, gateway leaves, and zkTorch commitment openings;
+- empty auxiliary input (`A = empty`, `lA = 0`);
+- exactly one ingress and one egress record for every task;
+- zkTorch KZG commitments binding each sampled input/output pair;
+- sampling derived from `rho`, the epoch, and task ID after commitments are
+  fixed.
 
-`scripts/demo.sh` builds a venv, starts the inference server, and runs the following loop:
+The public statements and private witnesses are defined in
+[`crates/pocomp-protocol`](crates/pocomp-protocol). The paper-to-code mapping and
+threat model are in [`docs/protocol.md`](docs/protocol.md).
 
-1. `POST /run` — server runs inference and returns per-output token commitments
-2. `POST /replay` at random token positions — server re-executes each request truncated to the challenged position and recomputes the commitment
-3. Negative test — a forged commitment must not match
-
-To build the OCI image with Nix, run the following:
-
-```bash
-# Build the hermetic runtime closure
-nix build .#closure
-
-# Build the OCI image — produces `deterministic-inference-server-runtime:<git-rev>`
-nix build .#oci
-docker load < result
-
-# Run the server in Docker
-docker run -d --name vllm-server --gpus all --privileged \
-  -e NVIDIA_DRIVER_CAPABILITIES=all \
-  -v "$PWD:/workspace" -p 8000:8000 \
-  deterministic-inference-server-runtime:dev \
-  --manifest /workspace/demos/e2e-audit/scripts/smoke.manifest.json \
-  --skip-boot-validation
-```
-
-The NVIDIA Container Toolkit must be installed and configured as Docker's default runtime:
+## Build and test
 
 ```bash
-sudo nvidia-ctk runtime configure --runtime=docker --set-as-default
-sudo systemctl restart docker
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+python -m pytest -q
 ```
 
-Troubleshooting:
+Build the SP1 host and guests with the SP1 toolchain:
 
-| Symptom | Fix |
-|---------|-----|
-| `Failed to infer device type` | Add `--privileged -e NVIDIA_DRIVER_CAPABILITIES=all` |
-| `No CUDA GPUs are available` | Add `--privileged` |
-| `Can't initialize NVML` | Set `"default-runtime": "nvidia"` in daemon.json |
-| `GLIBC_2.38 not found` | Don't set `LD_LIBRARY_PATH` to host system paths |
+```bash
+cd proofs/sp1
+cargo build --release -p pocomp-sp1
+```
 
-## CI gates
+Build the pinned zkTorch task binaries in the prover environment:
 
-| Gate | What it runs | Command |
-|------|-------------|---------|
-| PR | lint + schema + unit/integration | `make ci-pr` |
-| Main | + e2e + determinism + nix closure | `make ci-main` |
-| Nightly | + chaos + long-run | `make ci-nightly` |
-| Release | + release contracts | `make ci-release` |
+```bash
+cargo +nightly-2025-06-30 build --release \
+  --manifest-path third_party/zk-torch/Cargo.toml \
+  --bin zk_torch \
+  --bin pocomp_admit \
+  --bin pocomp_infer \
+  --bin pocomp_sanitize_onnx \
+  --bin pocomp_verify
+```
+
+zkTorch proving is CPU-only in this repository; a GPU prover is not provided.
+Model admission is a separate, one-time operation. Per-task proof generation
+refuses to regenerate or substitute the admitted randomized model commitments.
+
+`pocomp verify-bundle` requires explicit paths to both verifier executables. If
+either backend is missing, unpinned, malformed, or rejects its proof, bundle
+verification fails.
+
+The zkTorch path also requires the pinned setup file, a private model, its
+sanitized public architecture, a tensor specification, and the one-use
+commitment openings written by `pocomp-zktorch-committer`. See
+[`docs/operations.md`](docs/operations.md) for the end-to-end artifact flow.
+
+## Vast pods
+
+The API key is read only from `VAST_API_KEY`; it is never stored in pod state.
+Images must be registry-digest pinned.
+
+```bash
+export VAST_API_KEY=...
+python ops/pocompctl.py provision \
+  --pod-id pod-1 \
+  --image 'registry.example/pocomp@sha256:...' \
+  --ssh-public-key ~/.ssh/vast.pub
+```
+
+Rotate at an erasure boundary:
+
+```bash
+python ops/pocompctl.py rotate \
+  --pod-id pod-1 \
+  --image 'registry.example/pocomp@sha256:...' \
+  --ssh-public-key ~/.ssh/vast.pub
+```
+
+Rotation destroys the old instance before creating the new incarnation and
+emits an unsigned `SignedErasureCertificate` draft. An auditor must inspect and
+sign it before it can appear in a bundle:
+
+```bash
+cargo run -p pocomp-cli -- sign-erasure \
+  .pocomp/erasure.json .pocomp/erasure.signed.json \
+  --signing-key /secure/auditor-ed25519.hex
+```
+
+This signature authenticates the evidence; it does not upgrade
+`VastDestroyReplace` to physical erasure. No experiments are started by
+provisioning.
+
+## Repository layout
+
+```text
+crates/pocomp-protocol/  Wire types, commitments, sampling, native relations
+crates/pocomp-gateway/   External audited ingress/egress gateway
+crates/pocomp-verifier/  Cryptographic proof composition and assurance
+crates/pocomp-cli/       Native and cryptographic verification CLI
+proofs/sp1/              Pinned Pod/Task SP1 guests and host
+proofs/zktorch-committer/ One-use tensor commitments and openings
+third_party/zk-torch/    Pinned, hardened task prover fork
+ops/                     Vast lifecycle, task orchestration, zkTorch adapters
+```
