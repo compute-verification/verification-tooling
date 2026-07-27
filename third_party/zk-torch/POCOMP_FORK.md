@@ -9,6 +9,7 @@ Local security changes:
 - reject unchecked Arkworks point deserialization;
 - disable the upstream `fold` feature because its verification challenge is
   hard-coded to one as a documented temporary workaround;
+- reject `mock_prove` builds because their output is not a cryptographic proof;
 - add a verifier-only binary so verification never regenerates a proof first;
 - bind verification to the public architecture, tensor specification, trusted
   setup, encoded model, and exact input/output KZG commitments in the
@@ -24,6 +25,9 @@ Local security changes:
   point scale factor a second time;
 - remove the upstream `gpu` feature, which is wired by its CI to an unpublished
   campus-local ICICLE fork and cannot be built from the public ICICLE API;
+- remove the associated private-cluster workflow and notification scripts;
+- isolate accelerator candidates behind a tested CPU backend boundary so a
+  public ICICLE backend can be added without changing prover call sites;
 - add `pocomp_infer` to produce the exact canonical quantized egress tensor
   used by the gateway tap and task proof;
 - add a sanitizer for the v1 single-input/single-output fixed-shape ONNX

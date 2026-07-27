@@ -3,6 +3,9 @@
 #![allow(unused_imports)]
 #[cfg(feature = "fold")]
 compile_error!("the upstream zkTorch folding path is unsound and is disabled in the PoComp fork");
+#[cfg(feature = "mock_prove")]
+compile_error!("mock proving is not a proof and is disabled in the PoComp fork");
+pub(crate) mod backend;
 pub mod basic_block;
 pub mod graph;
 pub mod layer;

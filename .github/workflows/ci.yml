@@ -22,3 +22,18 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: python -m pytest -q
+
+  zktorch-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-06-30
+      - run: cargo check --manifest-path third_party/zk-torch/Cargo.toml --all-targets
+      - run: >-
+          cargo test --manifest-path third_party/zk-torch/Cargo.toml
+          --lib backend::cpu::tests
+      - run: >-
+          cargo check
+          --manifest-path proofs/zktorch-committer/Cargo.toml

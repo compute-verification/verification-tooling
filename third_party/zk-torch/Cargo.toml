@@ -30,5 +30,7 @@ pocomp-protocol = { path = "../../crates/pocomp-protocol" }
 
 [features]
 debug = []
+# These names are retained so accidental use fails with an explicit message
+# from lib.rs instead of silently selecting an unsupported proof mode.
 mock_prove = []
 fold = []
