@@ -27,8 +27,12 @@ bincode = "1.3.3"
 itertools = "0.13.0"
 downcast-rs = "2.0.1"
 pocomp-protocol = { path = "../../crates/pocomp-protocol" }
+icicle-bn254 = { path = "../icicle-v1.10.1/wrappers/rust/icicle-curves/icicle-bn254", optional = true, features = ["arkworks", "g2", "ec_ntt"] }
+icicle-core = { path = "../icicle-v1.10.1/wrappers/rust/icicle-core", optional = true, features = ["arkworks"] }
+icicle-cuda-runtime = { path = "../icicle-v1.10.1/wrappers/rust/icicle-cuda-runtime", optional = true }
 
 [features]
+icicle = ["dep:icicle-bn254", "dep:icicle-core", "dep:icicle-cuda-runtime"]
 debug = []
 # These names are retained so accidental use fails with an explicit message
 # from lib.rs instead of silently selecting an unsupported proof mode.

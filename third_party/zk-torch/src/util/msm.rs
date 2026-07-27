@@ -1,19 +1,18 @@
-use crate::backend::cpu;
+use crate::backend::{self, BackendGroup};
 use crate::util::{fft, ifft_in_place};
 use ark_bn254::{Fr, G1Projective};
-use ark_ec::{ScalarMul, VariableBaseMSM};
 use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 use ark_std::Zero;
 use rayon::prelude::*;
-pub fn msm<P: VariableBaseMSM>(a: &[P::MulBase], b: &[P::ScalarField]) -> P {
-  cpu::msm(a, b)
+pub fn msm<P: BackendGroup>(a: &[P::MulBase], b: &[Fr]) -> P {
+  P::backend_msm(a, b)
 }
 
 pub fn ssm_g1_in_place(points: &mut Vec<G1Projective>, scalars: &Vec<Fr>) {
-  cpu::ssm_g1_in_place(points, scalars);
+  backend::ssm_g1_in_place(points, scalars);
 }
 
-pub fn circulant_mul<G: ScalarMul + std::ops::MulAssign<Fr>>(domain: GeneralEvaluationDomain<Fr>, c: &Vec<Fr>, a: &Vec<G>) -> Vec<G> {
+pub fn circulant_mul<G: BackendGroup>(domain: GeneralEvaluationDomain<Fr>, c: &Vec<Fr>, a: &Vec<G>) -> Vec<G> {
   let lambda = domain.fft(c);
   let mut r = fft(domain, a);
   r.par_iter_mut().enumerate().for_each(|(i, x)| *x *= lambda[i]);

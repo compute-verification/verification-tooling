@@ -86,10 +86,14 @@ python ops/zktorch_infer.py \
   --output output-tensor.json
 ```
 
-The repository's zkTorch path is CPU-only. Upstream's GPU CI injects an
-unpublished campus-local ICICLE fork whose group FFT and scalar-scalar
-multiplication API is absent from public ICICLE releases. A reproducible GPU
-prover therefore requires new backend work, not a Cargo feature toggle.
+The repository's zkTorch fork has an optional, reproducible ICICLE v1.10.1
+backend for BN254 G1/G2 MSM and G1 group FFT. Build the prover with
+`--features icicle` and select it with `ZKTORCH_ACCELERATOR=icicle`. The default
+remains CPU. Small MSMs, scalar-field FFT, G2 group FFT, and element-wise G1
+scalar multiplication remain on the CPU because the pinned public ICICLE
+release does not provide useful entry points for all of them. See
+[`../third_party/zk-torch/ACCELERATION.md`](../third_party/zk-torch/ACCELERATION.md)
+for the runtime controls and validated proof matrix.
 
 ## Sealing and proving
 

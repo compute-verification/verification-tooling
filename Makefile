@@ -1,4 +1,4 @@
-.PHONY: test lint check sp1 zktorch zktorch-check
+.PHONY: test lint check sp1 zktorch zktorch-icicle zktorch-check
 
 test:
 	cargo test --workspace
@@ -17,6 +17,11 @@ sp1:
 zktorch:
 	cargo +nightly-2025-06-30 build --release --manifest-path third_party/zk-torch/Cargo.toml \
 		--bin zk_torch --bin pocomp_admit --bin pocomp_verify \
+		--bin pocomp_sanitize_onnx --bin pocomp_infer
+
+zktorch-icicle:
+	cargo +nightly-2025-06-30 build --release --manifest-path third_party/zk-torch/Cargo.toml \
+		--features icicle --bin zk_torch --bin pocomp_admit --bin pocomp_verify \
 		--bin pocomp_sanitize_onnx --bin pocomp_infer
 
 zktorch-check:

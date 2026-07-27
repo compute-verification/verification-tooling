@@ -24,10 +24,10 @@ Local security changes:
 - accept already-quantized signed integer inputs without applying the floating
   point scale factor a second time;
 - remove the upstream `gpu` feature, which is wired by its CI to an unpublished
-  campus-local ICICLE fork and cannot be built from the public ICICLE API;
+  campus-local ICICLE fork and cannot be built reproducibly;
 - remove the associated private-cluster workflow and notification scripts;
-- isolate accelerator candidates behind a tested CPU backend boundary so a
-  public ICICLE backend can be added without changing prover call sites;
+- isolate proof arithmetic behind a tested backend boundary and add an optional
+  backend using vendored public ICICLE v1.10.1 for G1/G2 MSM and G1 group FFT;
 - add `pocomp_infer` to produce the exact canonical quantized egress tensor
   used by the gateway tap and task proof;
 - add a sanitizer for the v1 single-input/single-output fixed-shape ONNX

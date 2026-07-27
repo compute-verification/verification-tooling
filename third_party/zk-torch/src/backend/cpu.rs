@@ -89,9 +89,9 @@ where
 }
 
 pub(crate) fn msm<P: VariableBaseMSM>(bases: &[P::MulBase], scalars: &[P::ScalarField]) -> P {
-  assert_eq!(bases.len(), scalars.len(), "MSM base and scalar lengths differ");
+  assert!(bases.len() >= scalars.len(), "MSM has fewer bases than scalars");
   let max_threads = rayon::current_num_threads();
-  let size = bases.len();
+  let size = scalars.len();
   if max_threads > size {
     return VariableBaseMSM::msm_unchecked(bases, scalars);
   }
@@ -161,10 +161,10 @@ mod tests {
   }
 
   #[test]
-  #[should_panic(expected = "MSM base and scalar lengths differ")]
-  fn msm_rejects_mismatched_lengths() {
-    let bases = vec![G1Projective::generator().into_affine(); 2];
-    let scalars = vec![Fr::from(1_u64)];
+  #[should_panic(expected = "MSM has fewer bases than scalars")]
+  fn msm_rejects_too_few_bases() {
+    let bases = vec![G1Projective::generator().into_affine()];
+    let scalars = vec![Fr::from(1_u64), Fr::from(2_u64)];
     let _ = msm::<G1Projective>(&bases, &scalars);
   }
 }
