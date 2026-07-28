@@ -30,19 +30,6 @@ Vast destroy/replace is useful experimental erasure evidence, but it is **not**
 the paper's physical erasure assumption and therefore only produces
 `Experimental` assurance.
 
-## Tested status
-
-The complete Task-PoComp path has been exercised on a fresh Vast instance. The
-test performed a real forward pass through a fixed-shape ONNX model, committed
-the exact input and output through the gateway, generated a zkTorch proof for
-the sampled task, generated the compressed SP1 Task relation proof, and
-independently verified both proofs.
-
-For the tested quantized input `[1, 1, 2, 0]`, model execution produced
-`[0, 1, 0, 3]`. See
-[`docs/task-pocomp-test-report-2026-07-27.md`](docs/task-pocomp-test-report-2026-07-27.md)
-for the recorded artifacts, proof sizes, and limitations.
-
 ## Protocol shape
 
 The v1 task profile is deliberately narrow:
