@@ -5,7 +5,7 @@ use crate::onnx;
 use crate::util;
 use ark_bn254::Fr;
 use ark_std::One;
-use ndarray::ArrayD;
+use ndarray::{arr0, ArrayD};
 use rayon::iter::ParallelIterator;
 use tract_onnx::pb::AttributeProto;
 use tract_onnx::prelude::DatumType;
@@ -45,6 +45,27 @@ impl Layer for PowLayer {
 
     let sf_log = onnx::SF_LOG.read().unwrap().to_owned();
     let sf_float = onnx::SF_FLOAT.read().unwrap().to_owned();
+    if let (Some(base), Some(exponent)) = (constants[0], constants[1]) {
+      if base.0.ndim() == 0 && exponent.0.ndim() == 0 {
+        let decode = |value: Fr, datum_type: DatumType| match datum_type {
+          DatumType::I32 | DatumType::I64 => util::fr_to_int(value) as f64,
+          DatumType::F32 => util::fr_to_int(value) as f64 / sf_float as f64,
+          _ => panic!("unsupported scalar Pow input type: {datum_type:?}"),
+        };
+        let value = decode(*base.0.first().unwrap(), base.1).powf(decode(*exponent.0.first().unwrap(), exponent.1));
+        let encoded = match input_types[0] {
+          DatumType::I32 | DatumType::I64 => value.round() as i64,
+          DatumType::F32 => (value * sf_float as f64).round() as i64,
+          datum_type => panic!("unsupported scalar Pow output type: {datum_type:?}"),
+        };
+        let constant = graph.addBB(Box::new(Const2BasicBlock {
+          c: arr0(Fr::from(encoded)).into_dyn(),
+        }));
+        let output = graph.addNode(constant, vec![]);
+        graph.outputs.push((output, 0));
+        return (graph, vec![input_shapes[0].clone()], vec![input_types[0]]);
+      }
+    }
     // Note: the following code is a workaround for the case that constants[0] is a scalar and constants[1] is a tensor
     //       If we want to formally prove this, we need to
     //       (1) either implement a new basic block that can handle this case

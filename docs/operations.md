@@ -60,7 +60,7 @@ python ops/zktorch_admit.py \
   --program-id classifier.v1 \
   --max-compute-micro-h100-hours 1000000 \
   --pow-len-log 20 \
-  --loaded-pow-len-log 20 \
+  --loaded-pow-len-log 19 \
   --scale-factor-log 16 \
   --cq-range-log 16 \
   --cq-range-lower-log 16

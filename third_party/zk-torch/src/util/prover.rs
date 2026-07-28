@@ -18,7 +18,7 @@ use rayon::prelude::*;
 use rayon::range;
 use sha3::{Digest, Keccak256};
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{self, Read};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CQArrayType {
@@ -186,9 +186,9 @@ pub fn prove(
   let modelsEncBytes = bincode::serialize(&modelsEnc).unwrap();
   let inputsEncBytes = bincode::serialize(&inputsEnc).unwrap();
   let outputsEncBytes = bincode::serialize(&outputsEnc).unwrap();
-  fs::write(&CONFIG.prover.enc_model_path, &modelsEncBytes).unwrap();
-  fs::write(&CONFIG.prover.enc_input_path, &inputsEncBytes).unwrap();
-  fs::write(&CONFIG.prover.enc_output_path, &outputsEncBytes).unwrap();
+  util::atomic_write(&CONFIG.prover.enc_model_path, &modelsEncBytes).unwrap();
+  util::atomic_write(&CONFIG.prover.enc_input_path, &inputsEncBytes).unwrap();
+  util::atomic_write(&CONFIG.prover.enc_output_path, &outputsEncBytes).unwrap();
 
   // Fiat-Shamir:
   let mut hasher = Keccak256::new();
@@ -205,9 +205,15 @@ pub fn prove(
   #[cfg(not(feature = "fold"))]
   let proofs = timed!(timing, "prove", graph.prove(srs, &setups, &models, &inputs, &outputs, &mut rng, timing));
 
-  proofs.serialize_uncompressed(File::create(&CONFIG.prover.proof_path).unwrap()).unwrap();
+  util::atomic_write_with(&CONFIG.prover.proof_path, |file| {
+    proofs.serialize_uncompressed(file).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+  })
+  .unwrap();
   #[cfg(feature = "fold")]
-  acc_proofs.serialize_uncompressed(File::create(&CONFIG.prover.acc_proof_path).unwrap()).unwrap();
+  util::atomic_write_with(&CONFIG.prover.acc_proof_path, |file| {
+    acc_proofs.serialize_uncompressed(file).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+  })
+  .unwrap();
 }
 
 #[cfg(not(feature = "mock_prove"))]
@@ -223,27 +229,30 @@ pub fn setup(srs: &SRS, graph: &Graph, models: &Vec<&ArrayD<Fr>>, timing: &mut T
       let file_path = format!("{}/{}", *LAYER_SETUP_DIR, file_name);
       if util::file_exists(&file_path) {
         println!("CQs: Loading layer model from file: {}", file_path);
-        let mut modelBytes = Vec::new();
-        File::open(file_path).unwrap().read_to_end(&mut modelBytes).unwrap();
-        let model: ArrayD<Data> = bincode::deserialize(&modelBytes).unwrap();
-        model
-      } else {
-        let model = convert_to_data(srs, model);
-        if bb_name.contains("CQ2BasicBlock") || bb_name.contains("CQBasicBlock") {
-          let modelBytes = bincode::serialize(&model).unwrap();
-          fs::write(file_path, &modelBytes).unwrap();
+        let cached = fs::read(&file_path).ok().and_then(|bytes| bincode::deserialize(&bytes).ok());
+        if let Some(model) = cached {
+          return model;
         }
-        model
+        eprintln!("CQs: Ignoring unreadable layer model cache: {file_path}");
       }
+      let model = convert_to_data(srs, model);
+      if bb_name.contains("CQ2BasicBlock") || bb_name.contains("CQBasicBlock") {
+        let modelBytes = bincode::serialize(&model).unwrap();
+        util::atomic_write(file_path, &modelBytes).unwrap();
+      }
+      model
     })
     .collect();
 
   let models_ref: Vec<&ArrayD<Data>> = models.iter().map(|model| model).collect();
   let setups = timed!(timing, "setup and encode models", graph.setup(srs, &models_ref));
   // Save files:
-  setups.serialize_uncompressed(File::create(&CONFIG.prover.setup_path).unwrap()).unwrap();
+  util::atomic_write_with(&CONFIG.prover.setup_path, |file| {
+    setups.serialize_uncompressed(file).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+  })
+  .unwrap();
   let modelsBytes = bincode::serialize(&models).unwrap();
-  fs::write(&CONFIG.prover.model_path, &modelsBytes).unwrap();
+  util::atomic_write(&CONFIG.prover.model_path, &modelsBytes).unwrap();
 }
 
 #[cfg(feature = "mock_prove")]

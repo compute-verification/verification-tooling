@@ -24,7 +24,7 @@ use sha3::{Digest, Keccak256};
 use std::collections::HashMap;
 use std::collections::{BTreeSet, HashSet};
 use std::fs::File;
-use std::io::Read;
+use std::io::{self, Read};
 
 pub fn combine_pairing_checks(checks: &Vec<&PairingCheck>) -> (Vec<G1Affine>, Vec<G2Affine>) {
   println!("{:?}", checks.iter().map(|x| x.len()).sum::<usize>());
@@ -157,6 +157,9 @@ pub fn verify(srs: &SRS, graph: &Graph, timing: &mut TimingTree) {
       graph.verify(srs, &modelsEnc, &inputsEnc, &outputsEnc, &proofs, &acc_proofs, &mut rng, timing)
     );
     let final_proof = graph.fold_proofs(srs, final_proofs_idx, final_acc_proofs_idx, &proofs, &acc_proofs);
-    final_proof.serialize_uncompressed(File::create(&CONFIG.prover.final_proof_path).unwrap()).unwrap();
+    util::atomic_write_with(&CONFIG.prover.final_proof_path, |file| {
+      final_proof.serialize_uncompressed(file).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    })
+    .unwrap();
   }
 }

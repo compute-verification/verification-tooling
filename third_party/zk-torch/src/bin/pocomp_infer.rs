@@ -60,5 +60,5 @@ fn main() {
     scale_log2: spec.egress.scale_log2,
     values,
   };
-  fs::write(&args[3], serde_json::to_vec(&tensor).expect("encode output tensor")).expect("write output tensor");
+  util::atomic_write(&args[3], &serde_json::to_vec(&tensor).expect("encode output tensor")).expect("write output tensor");
 }

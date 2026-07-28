@@ -4,8 +4,46 @@
  */
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use std::collections::hash_map::DefaultHasher;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static ATOMIC_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct PendingFile(PathBuf);
+
+impl Drop for PendingFile {
+  fn drop(&mut self) {
+    let _ = fs::remove_file(&self.0);
+  }
+}
+
+pub fn atomic_write_with(path: impl AsRef<Path>, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
+  let path = path.as_ref();
+  let parent = path.parent().unwrap_or_else(|| Path::new("."));
+  let name = path
+    .file_name()
+    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "atomic output path has no file name"))?
+    .to_string_lossy();
+  let sequence = ATOMIC_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+  let temporary = parent.join(format!(".{name}.tmp.{}.{sequence}", std::process::id()));
+  let pending = PendingFile(temporary.clone());
+  let mut file = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+  write(&mut file)?;
+  file.flush()?;
+  file.sync_all()?;
+  drop(file);
+  fs::rename(&temporary, path)?;
+  File::open(parent)?.sync_all()?;
+  std::mem::forget(pending);
+  Ok(())
+}
+
+pub fn atomic_write(path: impl AsRef<Path>, bytes: &[u8]) -> io::Result<()> {
+  atomic_write_with(path, |file| file.write_all(bytes))
+}
 
 // For serialization, ArrayD uses serde while G1Affine uses ark_serialize.
 // In order to bridge between the two, the following code snippet is used:
@@ -61,4 +99,47 @@ pub fn hash_str(s: &str) -> String {
 
 pub fn file_exists(path: &str) -> bool {
   fs::metadata(path).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn temporary_directory(name: &str) -> PathBuf {
+    let sequence = ATOMIC_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("zk-torch-{name}-{}-{sequence}", std::process::id()))
+  }
+
+  #[test]
+  fn atomic_write_replaces_complete_file() {
+    let directory = temporary_directory("atomic-replace");
+    fs::create_dir(&directory).unwrap();
+    let output = directory.join("artifact");
+    fs::write(&output, b"old").unwrap();
+
+    atomic_write(&output, b"new").unwrap();
+
+    assert_eq!(fs::read(&output).unwrap(), b"new");
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    fs::remove_dir_all(directory).unwrap();
+  }
+
+  #[test]
+  fn atomic_write_failure_preserves_previous_file() {
+    let directory = temporary_directory("atomic-failure");
+    fs::create_dir(&directory).unwrap();
+    let output = directory.join("artifact");
+    fs::write(&output, b"old").unwrap();
+
+    let error = atomic_write_with(&output, |file| {
+      file.write_all(b"incomplete")?;
+      Err(io::Error::new(io::ErrorKind::Other, "simulated failure"))
+    })
+    .unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert_eq!(fs::read(&output).unwrap(), b"old");
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    fs::remove_dir_all(directory).unwrap();
+  }
 }

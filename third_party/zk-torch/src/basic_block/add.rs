@@ -13,6 +13,9 @@ pub struct AddBasicBlock;
 impl BasicBlock for AddBasicBlock {
   fn run(&self, _model: &ArrayD<Fr>, inputs: &Vec<&ArrayD<Fr>>) -> Result<Vec<ArrayD<Fr>>, util::CQOutOfRangeError> {
     assert!(inputs.len() == 2 && inputs[0].ndim() <= 1 && inputs[1].ndim() <= 1);
+    if inputs[0].ndim() == 0 && inputs[1].ndim() == 0 {
+      return Ok(vec![arr0(*inputs[0].first().unwrap() + inputs[1].first().unwrap()).into_dyn()]);
+    }
     let mut r = ArrayD::zeros(IxDyn(&[std::cmp::max(inputs[0].len(), inputs[1].len())]));
     if inputs[0].len() == 1 && inputs[1].ndim() > 0 {
       azip!((r in &mut r, &x in inputs[1]) *r = x + inputs[0].first().unwrap());

@@ -69,6 +69,7 @@ def main() -> int:
                     ptau=args.ptau.resolve(strict=True),
                     work=work,
                     params=params,
+                    enable_layer_setup=True,
                 )
             )
         )

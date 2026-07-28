@@ -64,9 +64,9 @@ fn main() {
     "generated model openings do not match the private ONNX model"
   );
   let encoded: Vec<ArrayD<DataEnc>> = admitted.iter().map(|model| model.map(|data| DataEnc::new(&srs, data))).collect();
-  fs::write(
+  util::atomic_write(
     &CONFIG.prover.enc_model_path,
-    bincode::serialize(&encoded).expect("encode admitted model commitments"),
+    &bincode::serialize(&encoded).expect("encode admitted model commitments"),
   )
   .expect("write admitted model commitments");
 }

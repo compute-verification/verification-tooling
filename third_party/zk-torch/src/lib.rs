@@ -16,6 +16,7 @@ pub mod tests;
 pub mod util;
 
 use once_cell::sync::Lazy;
+use sha3::{Digest, Keccak256};
 use std::env;
 use std::fs::{self, File};
 use std::io::Read;
@@ -42,9 +43,25 @@ pub static CONFIG: Lazy<util::Config> = Lazy::new(|| {
 });
 
 pub static LAYER_SETUP_DIR: Lazy<String> = Lazy::new(|| {
+  let mut ptau = File::open(&CONFIG.ptau.ptau_path).expect("Could not open ptau for cache identity");
+  let mut hasher = Keccak256::new();
+  let mut buffer = [0_u8; 1024 * 1024];
+  loop {
+    let read = ptau.read(&mut buffer).expect("Could not hash ptau for cache identity");
+    if read == 0 {
+      break;
+    }
+    hasher.update(&buffer[..read]);
+  }
+  let ptau_digest = hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>();
   let dir = format!(
-    "layer_setup/{}_{}_{}",
-    CONFIG.sf.scale_factor_log, CONFIG.sf.cq_range_log, CONFIG.sf.cq_range_lower_log
+    "layer_setup/{}_{}_{}_{}_{}_{}",
+    ptau_digest,
+    CONFIG.ptau.pow_len_log,
+    CONFIG.ptau.loaded_pow_len_log,
+    CONFIG.sf.scale_factor_log,
+    CONFIG.sf.cq_range_log,
+    CONFIG.sf.cq_range_lower_log
   );
   assert!(Path::new(&dir).exists() || fs::create_dir_all(&dir).is_ok());
   dir

@@ -13,6 +13,7 @@ use plonky2::{timed, util::timing::TimingTree};
 use rand::rngs::StdRng;
 use std::collections::HashMap;
 use std::fs::File;
+use std::io;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
@@ -149,10 +150,15 @@ impl Graph {
           let file_path = format!("{}/{}", *LAYER_SETUP_DIR, file_name);
           if util::file_exists(&file_path) {
             println!("CQ setup exists: Loading layer setup from file: {}", file_path);
-            let setups =
-              Vec::<(Vec<G1Projective>, Vec<G2Projective>, Vec<DensePolynomial<Fr>>)>::deserialize_uncompressed(File::open(&file_path).unwrap())
-                .unwrap();
-            return setups.first().unwrap().clone();
+            let cached = File::open(&file_path)
+              .ok()
+              .and_then(|file| Vec::<(Vec<G1Projective>, Vec<G2Projective>, Vec<DensePolynomial<Fr>>)>::deserialize_uncompressed(file).ok());
+            if let Some(setups) = cached {
+              if let Some(setup) = setups.first() {
+                return setup.clone();
+              }
+            }
+            eprintln!("CQs: Ignoring unreadable layer setup cache: {file_path}");
           }
         }
         let setup = b.setup(srs, *m);
@@ -161,7 +167,10 @@ impl Graph {
         if save_cq_layer_setup {
           let file_name = format!("{}.setup", util::hash_str(&format!("{bb_name:?}")));
           let file_path = format!("{}/{}", *LAYER_SETUP_DIR, file_name);
-          setups.serialize_uncompressed(File::create(file_path).unwrap()).unwrap();
+          util::atomic_write_with(file_path, |file| {
+            setups.serialize_uncompressed(file).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+          })
+          .unwrap();
         }
         return setups.first().unwrap().clone();
       })

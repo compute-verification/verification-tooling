@@ -4,6 +4,7 @@ use std::fs;
 use prost::Message;
 use tract_onnx::pb::tensor_shape_proto::dimension::Value;
 use tract_onnx::pb::ModelProto;
+use zk_torch::util;
 
 fn fixed_shape(value: &tract_onnx::pb::ValueInfoProto) -> bool {
   let Some(kind) = value.r#type.as_ref().and_then(|ty| ty.value.as_ref()) else {
@@ -47,28 +48,43 @@ fn main() {
     match node.op_type.as_str() {
       "MatMul" => {
         assert_eq!(node.input.len(), 2, "MatMul must have two inputs");
-        assert!(
-          initializer_names.contains(node.input[1].as_str()),
-          "MatMul weights must be an initializer"
-        );
-        private_names.insert(node.input[1].clone());
+        if initializer_names.contains(node.input[1].as_str()) {
+          private_names.insert(node.input[1].clone());
+        }
       }
-      "Add" => {
+      "Gemm" => {
+        assert!(node.input.len() >= 2, "Gemm must have data and weight inputs");
+        assert!(initializer_names.contains(node.input[1].as_str()), "Gemm weights must be an initializer");
+        private_names.insert(node.input[1].clone());
+        if node.input.len() > 2 && initializer_names.contains(node.input[2].as_str()) {
+          private_names.insert(node.input[2].clone());
+        }
+      }
+      "Gather" => {
+        assert_eq!(node.input.len(), 2, "Gather must have data and index inputs");
+        assert!(
+          initializer_names.contains(node.input[0].as_str()),
+          "Gather data must be a private initializer"
+        );
+        private_names.insert(node.input[0].clone());
+      }
+      "Add" | "Mul" => {
         let constants: Vec<_> = node.input.iter().filter(|name| initializer_names.contains(name.as_str())).collect();
-        assert!(constants.len() <= 1, "Add may contain at most one private bias");
+        assert!(constants.len() <= 1, "{} may contain at most one private initializer", node.op_type);
         private_names.extend(constants.into_iter().cloned());
       }
-      "Relu" | "Identity" => {}
+      "Cast" | "Constant" | "ConstantOfShape" | "Div" | "Identity" | "Pow" | "ReduceMean" | "Reshape" | "Slice" | "Softmax" | "Split" | "Sqrt"
+      | "Sub" | "Tanh" | "Transpose" | "Where" => {}
       other => panic!("unsupported v1 ONNX operator: {other}"),
     }
   }
   assert_eq!(
     private_names,
     initializer_names.into_iter().map(str::to_owned).collect(),
-    "every initializer must be a MatMul weight or Add bias"
+    "every initializer must be a supported private weight, embedding, scale, or bias"
   );
   for initializer in &mut graph.initializer {
     zero_tensor(initializer);
   }
-  fs::write(&args[2], model.encode_to_vec()).expect("write public ONNX architecture");
+  util::atomic_write(&args[2], &model.encode_to_vec()).expect("write public ONNX architecture");
 }

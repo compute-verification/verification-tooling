@@ -15,12 +15,23 @@ import zktorch_prove  # noqa: E402
 
 
 PARAMETERS = {
-    "pow_len_log": 8,
+    "pow_len_log": 9,
     "loaded_pow_len_log": 8,
     "scale_factor_log": 4,
     "cq_range_log": 8,
     "cq_range_lower_log": 8,
 }
+
+
+def test_loaded_powers_leave_room_for_boundary_terms() -> None:
+    with pytest.raises(ValueError, match="must be smaller"):
+        zktorch_common.parameters(
+            pow_len_log=8,
+            loaded_pow_len_log=8,
+            scale_factor_log=4,
+            cq_range_log=8,
+            cq_range_lower_log=8,
+        )
 
 
 def admission_fixture(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path]:

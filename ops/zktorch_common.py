@@ -62,8 +62,8 @@ def parameters(
     }
     if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in result.values()):
         raise ValueError("zkTorch parameters must be nonnegative integers")
-    if loaded_pow_len_log > pow_len_log:
-        raise ValueError("loaded_pow_len_log cannot exceed pow_len_log")
+    if loaded_pow_len_log >= pow_len_log:
+        raise ValueError("loaded_pow_len_log must be smaller than pow_len_log")
     return result
 
 
@@ -79,6 +79,7 @@ def config(
     output_opening: pathlib.Path | None = None,
     reuse_model_setup: bool = False,
     model_path: pathlib.Path | None = None,
+    enable_layer_setup: bool = False,
 ) -> dict[str, Any]:
     prover = {
         "model_path": str(model_path if model_path is not None else work / "models"),
@@ -89,7 +90,7 @@ def config(
         "proof_path": str(work / "proofs"),
         "acc_proof_path": str(work / "acc_proofs"),
         "final_proof_path": str(work / "final_proofs"),
-        "enable_layer_setup": False,
+        "enable_layer_setup": enable_layer_setup,
         "input_opening_path": str(input_opening) if input_opening else None,
         "output_opening_path": str(output_opening) if output_opening else None,
         "reuse_model_setup": reuse_model_setup,
