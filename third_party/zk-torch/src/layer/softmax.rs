@@ -18,7 +18,10 @@ impl Layer for SoftmaxLayer {
   ) -> (Graph, Vec<Vec<usize>>, Vec<DatumType>) {
     let mut graph = Graph::new();
     let sf_log = onnx::SF_LOG.read().unwrap().to_owned();
-    let max = graph.addBB(Box::new(MaxBasicBlock {}));
+    let max = graph.addBB(Box::new(RepeaterBasicBlock {
+      basic_block: Box::new(MaxBasicBlock {}),
+      N: 1,
+    }));
     let sub = graph.addBB(Box::new(RepeaterBasicBlock {
       basic_block: Box::new(SubBasicBlock {}),
       N: 1,
@@ -68,24 +71,6 @@ impl Layer for SoftmaxLayer {
       basic_block: Box::new(MulScalarBasicBlock {}),
       N: 1,
     }));
-    let change_SF = graph.addBB(Box::new(ChangeSFBasicBlock {
-      input_SF: sf_log * 2,
-      output_SF: sf_log,
-    }));
-    let change_SF_check = graph.addBB(Box::new(RepeaterBasicBlock {
-      basic_block: Box::new(CQ2BasicBlock {
-        n: input_shapes[0][input_shapes[0].len() - 1].next_power_of_two(),
-        setup: Some((
-          Box::new(ChangeSFBasicBlock {
-            input_SF: sf_log * 2,
-            output_SF: sf_log,
-          }),
-          *onnx::CQ_RANGE_LOWER,
-          *onnx::CQ_RANGE,
-        )),
-      }),
-      N: 1,
-    }));
 
     // The proving idea is as follows
     // 1. m = max(X):
@@ -112,8 +97,7 @@ impl Layer for SoftmaxLayer {
     let rec_output = graph.addNode(reciprocal, vec![(sum_output, 0)]);
     let _ = graph.addNode(rec_check, vec![(sum_output, 0), (rec_output, 0)]);
     let mul_output = graph.addNode(mul, vec![(exp_output, 0), (rec_output, 0)]);
-    let output = graph.addNode(change_SF, vec![(mul_output, 0)]);
-    let _ = graph.addNode(change_SF_check, vec![(mul_output, 0), (output, 0)]);
+    let output = super::add_fixed_point_rescale(&mut graph, (mul_output, 0), sf_log * 2, sf_log, input_shapes[0]);
     graph.outputs.push((output, 0));
 
     (graph, vec![input_shapes[0].clone()], vec![input_types[0]])

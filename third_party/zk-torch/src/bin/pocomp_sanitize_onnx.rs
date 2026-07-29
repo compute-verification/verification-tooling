@@ -73,8 +73,9 @@ fn main() {
         assert!(constants.len() <= 1, "{} may contain at most one private initializer", node.op_type);
         private_names.extend(constants.into_iter().cloned());
       }
-      "Cast" | "Constant" | "ConstantOfShape" | "Div" | "Identity" | "Pow" | "ReduceMean" | "Reshape" | "Slice" | "Softmax" | "Split" | "Sqrt"
-      | "Sub" | "Tanh" | "Transpose" | "Where" => {}
+      "Cast" | "Concat" | "Constant" | "ConstantOfShape" | "Div" | "Equal" | "Expand" | "Identity" | "Neg" | "Pow" | "ReduceMean"
+      | "Reciprocal" | "Reshape" | "Sigmoid" | "Slice" | "Softmax" | "Split" | "Sqrt" | "Sub" | "Tanh" | "Transpose" | "Unsqueeze"
+      | "Where" => {}
       other => panic!("unsupported v1 ONNX operator: {other}"),
     }
   }

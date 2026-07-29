@@ -69,21 +69,28 @@ impl BasicBlock for DivConstProofBasicBlock {
     assert!(inputs.len() == 1);
     let shape = inputs[0].shape();
 
+    let c = self.c as i128;
     let out = util::array_into_iter(inputs[0])
       .map(|x| {
-        let mut x = util::fr_to_int(*x) as f64;
-        x /= self.c as f64;
-        Fr::from(x.round() as i128)
+        let x = util::fr_to_int(*x);
+        let magnitude = x.unsigned_abs();
+        let quotient = ((2 * magnitude + c as u128) / (2 * c as u128)) as i128;
+        Fr::from(if x < 0 { -quotient } else { quotient })
       })
       .collect::<Vec<_>>();
 
     // r nonnegative, checked with CQ
     let r = util::array_into_iter(inputs[0])
-      .map(|x| {
-        let x = util::fr_to_int(*x) as i128;
-        let remainder = ((x + self.c as i128) % (2 * self.c as i128) + x % (2 * self.c as i128)) % (2 * self.c as i128);
-        let remainder = if remainder < 0 { remainder + 2 * self.c as i128 } else { remainder };
-        Fr::from(remainder)
+      .zip(out.iter())
+      .map(|(x, quotient)| {
+        let x = util::fr_to_int(*x);
+        let quotient = util::fr_to_int(*quotient);
+        let shifted_remainder = 2 * x + c - 2 * c * quotient;
+        assert!(
+          (0..=2 * c).contains(&shifted_remainder),
+          "rounded constant division produced an out-of-range remainder"
+        );
+        Fr::from(shifted_remainder)
       })
       .collect::<Vec<_>>();
 
@@ -92,7 +99,7 @@ impl BasicBlock for DivConstProofBasicBlock {
       .iter()
       .map(|x| {
         let x = util::fr_to_int(*x) as i128;
-        Fr::from(2 * self.c as i128 - x as i128)
+        Fr::from(2 * c - x)
       })
       .collect::<Vec<_>>();
 

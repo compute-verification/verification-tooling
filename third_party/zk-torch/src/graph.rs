@@ -398,13 +398,31 @@ impl Graph {
         pairings
       })
       .collect();
-    let pairings = timed!(
+    let combined_pairings = timed!(
       timing,
       "combine pairings",
       util::combine_pairing_checks(&pairings.iter().flatten().collect())
     );
-    let pairing_check = timed!(timing, "pairings", Bn254::multi_pairing(pairings.0.iter(), pairings.1.iter()));
-    assert_eq!(pairing_check, PairingOutput::zero());
+    let pairing_check = timed!(
+      timing,
+      "pairings",
+      Bn254::multi_pairing(combined_pairings.0.iter(), combined_pairings.1.iter())
+    );
+    if pairing_check != PairingOutput::zero() {
+      for (node_index, node_checks) in pairings.iter().enumerate() {
+        for (check_index, check) in node_checks.iter().enumerate() {
+          let individual = Bn254::multi_pairing(check.iter().map(|pair| pair.0), check.iter().map(|pair| pair.1));
+          assert_eq!(
+            individual,
+            PairingOutput::zero(),
+            "pairing check {check_index} failed at graph node {node_index}: {} | {:?}",
+            self.layer_names[node_index],
+            self.basic_blocks[self.nodes[node_index].basic_block]
+          );
+        }
+      }
+      panic!("combined pairing check failed although every individual check passed");
+    }
   }
 
   #[cfg(feature = "fold")]

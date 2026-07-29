@@ -18,6 +18,7 @@ impl Layer for MulLayer {
     _attributes: &Vec<&AttributeProto>,
   ) -> (Graph, Vec<Vec<usize>>, Vec<DatumType>) {
     let mut graph = Graph::new();
+    let output_shape = util::broadcastDims(input_shapes, 0);
     let mul_scalar = if input_shapes[0].len() == input_shapes[1].len() && input_shapes[0].len() == 0 {
       graph.addBB(Box::new(MulScalarBasicBlock {}))
     } else {
@@ -27,45 +28,6 @@ impl Layer for MulLayer {
       }))
     };
     let sf_log = onnx::SF_LOG.read().unwrap().to_owned();
-    let change_SF = graph.addBB(Box::new(ChangeSFBasicBlock {
-      input_SF: sf_log * 2,
-      output_SF: sf_log,
-    }));
-    let change_SF_check = if input_shapes[0].len() == input_shapes[1].len() && input_shapes[0].len() == 0 {
-      graph.addBB(Box::new(CQ2BasicBlock {
-        n: 1,
-        setup: Some((
-          Box::new(ChangeSFBasicBlock {
-            input_SF: sf_log * 2,
-            output_SF: sf_log,
-          }),
-          *onnx::CQ_RANGE_LOWER,
-          *onnx::CQ_RANGE,
-        )),
-      }))
-    } else {
-      graph.addBB(Box::new(RepeaterBasicBlock {
-        basic_block: Box::new(CQ2BasicBlock {
-          n: if input_shapes[1].len() == 0 {
-            input_shapes[0][input_shapes[0].len() - 1].next_power_of_two()
-          } else {
-            std::cmp::max(
-              input_shapes[0][input_shapes[0].len() - 1].next_power_of_two(),
-              input_shapes[1][input_shapes[1].len() - 1].next_power_of_two(),
-            )
-          },
-          setup: Some((
-            Box::new(ChangeSFBasicBlock {
-              input_SF: sf_log * 2,
-              output_SF: sf_log,
-            }),
-            *onnx::CQ_RANGE_LOWER,
-            *onnx::CQ_RANGE,
-          )),
-        }),
-        N: 1,
-      }))
-    };
     // If any of the inputs are scalars, use the scalar version of the mul basic block.
     // If the first input is a scalar, swap the inputs, because the mul scalar basic block expects the scalar to be the second input. If the last dimension differs between the two inputs, broadcast.
     let mul_output = if input_shapes[0].len() == 0 {
@@ -122,14 +84,13 @@ impl Layer for MulLayer {
     };
 
     if input_types[0].is_float() {
-      let change_SF_output = graph.addNode(change_SF, vec![(mul_output, 0)]);
-      let _ = graph.addNode(change_SF_check, vec![(mul_output, 0), (change_SF_output, 0)]);
+      let change_SF_output = super::add_fixed_point_rescale(&mut graph, (mul_output, 0), sf_log * 2, sf_log, &output_shape);
       graph.outputs.push((change_SF_output, 0));
     } else if input_types[0].is_integer() {
       graph.outputs.push((mul_output, 0));
     } else {
       panic!("Mul input type {:?} is not supported", input_types[0]);
     }
-    (graph, vec![util::broadcastDims(input_shapes, 0)], vec![input_types[0]])
+    (graph, vec![output_shape], vec![input_types[0]])
   }
 }

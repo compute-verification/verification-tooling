@@ -9,6 +9,7 @@ from typing import Any
 
 PIN = "63b9c68960f3ca84026d89428dd6d8129e930d53"
 PROTOCOL_VERSION = "pocomp.v1"
+ADMISSION_FORMAT = "pocomp-zktorch-affine-v2"
 ADMISSION_FILES = ("models", "setups", "modelsEnc")
 
 
@@ -79,12 +80,17 @@ def config(
     output_opening: pathlib.Path | None = None,
     reuse_model_setup: bool = False,
     model_path: pathlib.Path | None = None,
+    admission_root: pathlib.Path | None = None,
     enable_layer_setup: bool = False,
 ) -> dict[str, Any]:
+    admitted = admission_root if admission_root is not None else work
     prover = {
-        "model_path": str(model_path if model_path is not None else work / "models"),
-        "setup_path": str(work / "setups"),
+        "model_path": str(model_path if model_path is not None else admitted / "models"),
+        "setup_path": str(admitted / "setups"),
         "enc_model_path": str(work / "modelsEnc"),
+        "admitted_enc_model_path": (
+            str(admitted / "modelsEnc") if admission_root is not None else None
+        ),
         "enc_input_path": str(work / "inputsEnc"),
         "enc_output_path": str(work / "outputsEnc"),
         "proof_path": str(work / "proofs"),
@@ -149,6 +155,8 @@ def load_admission(
         raise ValueError("model admission has the wrong protocol version")
     if admission.get("proof_system_version") != PIN:
         raise ValueError("model admission has the wrong zkTorch pin")
+    if admission.get("artifact_format") != ADMISSION_FORMAT:
+        raise ValueError("model admission uses an unsupported artifact format")
     params = parameters(**admission["parameters"])
     if admission["architecture_digest"] != protocol_hash_file(public_onnx):
         raise ValueError("public architecture does not match model admission")

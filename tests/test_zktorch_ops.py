@@ -56,6 +56,7 @@ def admission_fixture(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Pat
     admission = {
         "protocol_version": zktorch_common.PROTOCOL_VERSION,
         "proof_system_version": zktorch_common.PIN,
+        "artifact_format": zktorch_common.ADMISSION_FORMAT,
         "architecture_digest": zktorch_common.protocol_hash(public.read_bytes()),
         "tensor_spec_digest": zktorch_common.protocol_hash(tensor_spec.read_bytes()),
         "model_commitment": zktorch_common.protocol_hash((root / "modelsEnc").read_bytes()),
@@ -178,7 +179,7 @@ pathlib.Path(sys.argv[3]).write_text(json.dumps({"backend": "sp1", "proof_bytes"
         """
 import json, pathlib, sys
 config = json.loads(pathlib.Path(sys.argv[1]).read_text())
-for key in ("enc_input_path", "enc_output_path", "proof_path"):
+for key in ("enc_model_path", "enc_input_path", "enc_output_path", "proof_path"):
     pathlib.Path(config["prover"][key]).write_bytes(key.encode())
 """,
     )
@@ -232,3 +233,90 @@ for key in ("enc_input_path", "enc_output_path", "proof_path"):
     assert component["task_relation_proof"]["backend"] == "sp1"
     assert component["task_proofs"][0]["statement"]["task_id"] == "task-1"
     assert component["task_proofs"][0]["proof"]["backend"] == "zk-torch"
+
+
+def test_batch_prover_reuses_one_process_for_multiple_tasks(
+    tmp_path: pathlib.Path,
+) -> None:
+    admission_root, public, tensor_spec, ptau = admission_fixture(tmp_path)
+    admission = json.loads((admission_root / "admission.json").read_text())
+    private = tmp_path / "private.onnx"
+    private.write_bytes(b"private model")
+    tensor = tmp_path / "input.json"
+    tensor.write_text('{"shape":[1,2],"scale_log2":4,"values":[-3,7]}')
+    input_opening = tmp_path / "input.opening"
+    output_opening = tmp_path / "output.opening"
+    input_opening.write_bytes(b"input opening")
+    output_opening.write_bytes(b"output opening")
+
+    jobs = []
+    outputs = []
+    for index in range(2):
+        statement = {
+            "proof_system_version": zktorch_common.PIN,
+            "task_id": f"task-{index}",
+            "architecture_digest": admission["architecture_digest"],
+            "tensor_spec_digest": admission["tensor_spec_digest"],
+            "model_commitment": admission["model_commitment"],
+            "setup_digest": admission["setup_digest"],
+            "parameters": admission["parameters"],
+        }
+        statement_path = tmp_path / f"statement-{index}.json"
+        statement_path.write_text(json.dumps(statement))
+        proof_path = tmp_path / f"proof-{index}.json"
+        outputs.append(proof_path)
+        jobs.append(
+            {
+                "statement": str(statement_path),
+                "statement_digest": "sha256:" + f"{index + 1:02x}" * 32,
+                "input_tensor": str(tensor),
+                "input_opening": str(input_opening),
+                "output_opening": str(output_opening),
+                "output": str(proof_path),
+            }
+        )
+    jobs_path = tmp_path / "jobs.json"
+    jobs_path.write_text(json.dumps(jobs))
+
+    batch = executable(
+        tmp_path / "pocomp_batch_prove",
+        """
+import json, pathlib, shutil, sys
+assert len(sys.argv) == 3
+for config_path in sys.argv[1:]:
+    config = json.loads(pathlib.Path(config_path).read_text())
+    prover = config["prover"]
+    shutil.copyfile(prover["admitted_enc_model_path"], prover["enc_model_path"])
+    for key in ("enc_input_path", "enc_output_path", "proof_path"):
+        pathlib.Path(prover[key]).write_bytes(key.encode())
+""",
+    )
+    verifier = executable(tmp_path / "verifier", "raise SystemExit(0)\n")
+    subprocess.run(
+        [
+            sys.executable,
+            str(OPS / "zktorch_batch_prove.py"),
+            "--jobs",
+            str(jobs_path),
+            "--admission",
+            str(admission_root),
+            "--private-onnx",
+            str(private),
+            "--public-onnx",
+            str(public),
+            "--tensor-spec",
+            str(tensor_spec),
+            "--ptau",
+            str(ptau),
+            "--zktorch-batch",
+            str(batch),
+            "--verifier",
+            str(verifier),
+        ],
+        check=True,
+    )
+
+    assert [json.loads(path.read_text())["backend"] for path in outputs] == [
+        "zk-torch",
+        "zk-torch",
+    ]

@@ -66,6 +66,37 @@ fn main() {
   let mut timing = TimingTree::default();
   let srs = ptau::load_file(&CONFIG.ptau.ptau_path, CONFIG.ptau.pow_len_log, CONFIG.ptau.loaded_pow_len_log);
   let (graph, _) = onnx::load_file(&CONFIG.onnx.model_path);
+  let encoded_models: Vec<ArrayD<DataEnc>> = bincode::deserialize(&model_bytes).expect("decode encoded models");
+  assert_eq!(
+    encoded_models.len(),
+    graph.basic_blocks.len(),
+    "public architecture basic-block count does not match admitted model commitments"
+  );
+  for (index, (block, encoded)) in graph.basic_blocks.iter().zip(encoded_models.iter()).enumerate() {
+    if block.can_deduplicate() {
+      continue;
+    }
+    let expected = block.genModel();
+    let expected_shape = if expected.ndim() <= 1 {
+      Vec::new()
+    } else {
+      expected.shape()[..expected.ndim() - 1].to_vec()
+    };
+    let expected_width = if expected.ndim() <= 1 {
+      expected.len()
+    } else {
+      *expected.shape().last().unwrap()
+    };
+    assert_eq!(
+      encoded.shape(),
+      expected_shape,
+      "public architecture model shape differs at basic block {index}: {block:?}"
+    );
+    assert!(
+      encoded.iter().all(|commitment| commitment.len == expected_width),
+      "public architecture model width differs at basic block {index}: {block:?}"
+    );
+  }
   assert_eq!(graph.outputs.len(), 1, "v1 requires exactly one graph output");
   for (node, output) in &graph.outputs {
     final_outputs.push(outputs[*node as usize][*output].clone());

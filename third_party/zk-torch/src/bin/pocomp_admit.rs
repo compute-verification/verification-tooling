@@ -5,7 +5,7 @@ use plonky2::util::timing::TimingTree;
 use serde::Deserialize;
 use tract_onnx::pb::tensor_shape_proto::dimension::Value;
 use tract_onnx::prelude::Framework;
-use zk_torch::basic_block::{DataEnc, SRS};
+use zk_torch::basic_block::SRS;
 use zk_torch::{onnx, ptau, util, CONFIG};
 
 #[derive(Deserialize)]
@@ -63,7 +63,8 @@ fn main() {
     util::model_openings_match(&admitted, &models),
     "generated model openings do not match the private ONNX model"
   );
-  let encoded: Vec<ArrayD<DataEnc>> = admitted.iter().map(|model| model.map(|data| DataEnc::new(&srs, data))).collect();
+  let admitted_refs: Vec<&ArrayD<_>> = admitted.iter().collect();
+  let encoded = util::encode_data_arrays(&srs, &admitted_refs);
   util::atomic_write(
     &CONFIG.prover.enc_model_path,
     &bincode::serialize(&encoded).expect("encode admitted model commitments"),

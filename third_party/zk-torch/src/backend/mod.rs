@@ -3,6 +3,7 @@ use ark_ec::{ScalarMul, VariableBaseMSM};
 use ark_poly::GeneralEvaluationDomain;
 use once_cell::sync::Lazy;
 use std::ops::MulAssign;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
 
 pub(crate) mod cpu;
@@ -29,6 +30,8 @@ static ACCELERATOR: Lazy<Accelerator> = Lazy::new(|| {
   }
 });
 
+static FORCE_CPU: AtomicBool = AtomicBool::new(false);
+
 #[cfg(feature = "icicle")]
 static PARITY_CHECK: Lazy<bool> = Lazy::new(|| match std::env::var("ZKTORCH_ICICLE_PARITY_CHECK") {
   Ok(value) if value == "1" => true,
@@ -48,10 +51,24 @@ fn icicle_primitive_enabled(variable: &'static str) -> bool {
 }
 
 fn use_icicle() -> bool {
-  *ACCELERATOR == Accelerator::Icicle
+  *ACCELERATOR == Accelerator::Icicle && !FORCE_CPU.load(Ordering::Relaxed)
 }
 
-fn report_fallback(operation: &'static str, notice: &'static Once) {
+pub(crate) fn with_cpu_backend<T>(operation: impl FnOnce() -> T) -> T {
+  struct ResetCpuOverride;
+
+  impl Drop for ResetCpuOverride {
+    fn drop(&mut self) {
+      FORCE_CPU.store(false, Ordering::Relaxed);
+    }
+  }
+
+  assert!(!FORCE_CPU.swap(true, Ordering::Relaxed), "nested CPU backend overrides are unsupported");
+  let _reset = ResetCpuOverride;
+  operation()
+}
+
+fn report_cpu_primitive(operation: &'static str, notice: &'static Once) {
   if use_icicle() {
     notice.call_once(|| eprintln!("zkTorch ICICLE backend: {operation} remains on CPU"));
   }
@@ -84,7 +101,7 @@ impl BackendGroup for ark_ec::short_weierstrass::Projective<ark_bn254::g1::Confi
       unreachable!();
     }
     static NOTICE: Once = Once::new();
-    report_fallback("G1 group FFT", &NOTICE);
+    report_cpu_primitive("G1 group FFT", &NOTICE);
     if inverse {
       cpu::ifft(domain, values)
     } else {
@@ -98,9 +115,10 @@ impl BackendGroup for ark_ec::short_weierstrass::Projective<ark_bn254::g1::Confi
       {
         let accelerated = icicle::msm_g1(bases, scalars);
         if *PARITY_CHECK {
+          let expected = cpu::msm::<G1Projective>(bases, scalars);
           assert_eq!(
             accelerated,
-            cpu::msm::<G1Projective>(bases, scalars),
+            expected,
             "ICICLE G1 MSM parity failure for {} scalars and {} bases",
             scalars.len(),
             bases.len()
@@ -112,7 +130,7 @@ impl BackendGroup for ark_ec::short_weierstrass::Projective<ark_bn254::g1::Confi
       unreachable!();
     }
     static NOTICE: Once = Once::new();
-    report_fallback("G1 MSM", &NOTICE);
+    report_cpu_primitive("G1 MSM", &NOTICE);
     cpu::msm(bases, scalars)
   }
 }
@@ -120,7 +138,7 @@ impl BackendGroup for ark_ec::short_weierstrass::Projective<ark_bn254::g1::Confi
 impl BackendGroup for ark_ec::short_weierstrass::Projective<ark_bn254::g2::Config> {
   fn backend_fft(domain: GeneralEvaluationDomain<Fr>, values: &[Self], inverse: bool) -> Vec<Self> {
     static NOTICE: Once = Once::new();
-    report_fallback("G2 group FFT", &NOTICE);
+    report_cpu_primitive("G2 group FFT", &NOTICE);
     if inverse {
       cpu::ifft(domain, values)
     } else {
@@ -134,9 +152,10 @@ impl BackendGroup for ark_ec::short_weierstrass::Projective<ark_bn254::g2::Confi
       {
         let accelerated = icicle::msm_g2(bases, scalars);
         if *PARITY_CHECK {
+          let expected = cpu::msm::<G2Projective>(bases, scalars);
           assert_eq!(
             accelerated,
-            cpu::msm::<G2Projective>(bases, scalars),
+            expected,
             "ICICLE G2 MSM parity failure for {} scalars and {} bases",
             scalars.len(),
             bases.len()
@@ -148,14 +167,14 @@ impl BackendGroup for ark_ec::short_weierstrass::Projective<ark_bn254::g2::Confi
       unreachable!();
     }
     static NOTICE: Once = Once::new();
-    report_fallback("G2 MSM", &NOTICE);
+    report_cpu_primitive("G2 MSM", &NOTICE);
     cpu::msm(bases, scalars)
   }
 }
 
 pub(crate) fn ssm_g1_in_place(points: &mut [G1Projective], scalars: &[Fr]) {
   static NOTICE: Once = Once::new();
-  report_fallback("element-wise G1 scalar multiplication", &NOTICE);
+  report_cpu_primitive("element-wise G1 scalar multiplication", &NOTICE);
   cpu::ssm_g1_in_place(points, scalars);
 }
 

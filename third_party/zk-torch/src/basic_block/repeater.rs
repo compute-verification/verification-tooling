@@ -173,6 +173,10 @@ fn combineArr<T: Clone>(arr: &ArrayD<&Vec<&ArrayD<T>>>) -> Vec<ArrayD<T>> {
 }
 
 impl BasicBlock for RepeaterBasicBlock {
+  fn can_deduplicate(&self) -> bool {
+    self.basic_block.can_deduplicate()
+  }
+
   fn genModel(&self) -> ArrayD<Fr> {
     self.basic_block.genModel()
   }

@@ -15,8 +15,9 @@ documented v1 profile.
   `150e6294959f40dbc3ba42eb21c8eccc14c95bc5`.
 - A pinned zkTorch fork at commit
   `63b9c68960f3ca84026d89428dd6d8129e930d53`, with checked curve-point
-  deserialization, persistent model admission, exact quantized tensor
-  handling, CPU proving, and verifier-only execution.
+  deserialization for untrusted proofs, integrity-checked persistent model
+  admission, exact quantized tensor handling, CPU proving, optional ICICLE
+  acceleration, and verifier-only execution.
 - A fail-closed audit verifier. Native relation evaluation is a test/debug
   facility and is never accepted as a cryptographic proof.
 - An external gateway that commits and journals the exact request and response
@@ -72,12 +73,30 @@ cargo +nightly-2025-06-30 build --release \
   --bin pocomp_admit \
   --bin pocomp_infer \
   --bin pocomp_sanitize_onnx \
-  --bin pocomp_verify
+  --bin pocomp_verify \
+  --bin pocomp_batch_prove
 ```
 
-zkTorch proving is CPU-only in this repository; a GPU prover is not provided.
+CPU proving is the default. On a CUDA host, add `--features icicle` and set
+`ZKTORCH_ACCELERATOR=icicle` to accelerate BN254 G1/G2 MSM and G1 group FFT
+with the pinned ICICLE v1.10.1 backend. Other proof operations remain on the
+CPU. The tiny GPT-2 benchmark confirmed GPU execution and proof compatibility,
+but did not show an end-to-end speedup. A complete Qwen2.5-0.5B forward-pass
+proof was also generated and independently verified. On that RTX 5090 run,
+ICICLE produced an invalid MSM result and the historical implementation
+completed the proof on CPU. The backend now aborts on CUDA errors, invalid
+curve points, and parity failures instead of silently changing execution
+backends. GPU acceleration must therefore be treated as experimental rather
+than assumed from backend selection. See
+[`docs/qwen2.5-0.5b-proof-test-2026-07-29.md`](docs/qwen2.5-0.5b-proof-test-2026-07-29.md)
+for the result, resource use, fidelity limitation, and insecure benchmark-setup
+warning.
+
 Model admission is a separate, one-time operation. Per-task proof generation
 refuses to regenerate or substitute the admitted randomized model commitments.
+The batch prover keeps one validated admitted model in memory for all sampled
+tasks in a Task-PoComp run, while producing and externally verifying a separate
+proof artifact for each task.
 
 `pocomp verify-bundle` requires explicit paths to both verifier executables. If
 either backend is missing, unpinned, malformed, or rejects its proof, bundle

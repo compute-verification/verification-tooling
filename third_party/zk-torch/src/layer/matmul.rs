@@ -25,24 +25,6 @@ impl Layer for MatMulLayer {
     let permutation = ((0..b).map(|x| x * a).collect(), (0..a).collect());
 
     let sf_log = onnx::SF_LOG.read().unwrap().to_owned();
-    let change_SF = graph.addBB(Box::new(ChangeSFBasicBlock {
-      input_SF: sf_log * 2,
-      output_SF: sf_log,
-    }));
-    let change_SF_check = graph.addBB(Box::new(RepeaterBasicBlock {
-      basic_block: Box::new(CQ2BasicBlock {
-        n: input_shapes[1][input_shapes[1].len() - 1].next_power_of_two(),
-        setup: Some((
-          Box::new(ChangeSFBasicBlock {
-            input_SF: sf_log * 2,
-            output_SF: sf_log,
-          }),
-          *onnx::CQ_RANGE_LOWER,
-          *onnx::CQ_RANGE,
-        )),
-      }),
-      N: 1,
-    }));
     let small_matmul = (a * b) < 1 << CONFIG.ptau.loaded_pow_len_log;
     let use_cqlin = constants.len() > 1 && constants[1].is_some() && small_matmul;
     let matmul_output = if use_cqlin {
@@ -72,10 +54,6 @@ impl Layer for MatMulLayer {
       let transpose_output = graph.addNode(transpose, vec![(-2, 0)]);
       graph.addNode(matmul, vec![(-1, 0), (transpose_output, 0)])
     };
-    let change_SF_output = graph.addNode(change_SF, vec![(matmul_output, 0)]);
-    let _ = graph.addNode(change_SF_check, vec![(matmul_output, 0), (change_SF_output, 0)]);
-    graph.outputs.push((change_SF_output, 0));
-
     let mut output_shape = util::broadcastDims(input_shapes, 2);
     if input_shapes[0].len() >= 2 {
       output_shape.push(input_shapes[0][input_shapes[0].len() - 2]);
@@ -83,6 +61,9 @@ impl Layer for MatMulLayer {
     } else {
       output_shape.push(input_shapes[1][input_shapes[1].len() - 1]);
     }
+    let change_SF_output = super::add_fixed_point_rescale(&mut graph, (matmul_output, 0), sf_log * 2, sf_log, &output_shape);
+    graph.outputs.push((change_SF_output, 0));
+
     (graph, vec![output_shape], vec![input_types[0]])
   }
 }
@@ -107,24 +88,6 @@ impl Layer for MultiHeadMatMulLayer {
     let output_shape: Vec<_> = constants[2].unwrap().0.iter().map(|x| util::fr_to_int(*x) as usize).collect();
 
     let sf_log = onnx::SF_LOG.read().unwrap().to_owned();
-    let change_SF = graph.addBB(Box::new(ChangeSFBasicBlock {
-      input_SF: sf_log * 2,
-      output_SF: sf_log,
-    }));
-    let change_SF_check = graph.addBB(Box::new(RepeaterBasicBlock {
-      basic_block: Box::new(CQ2BasicBlock {
-        n: output_shape[output_shape.len() - 1].next_power_of_two(),
-        setup: Some((
-          Box::new(ChangeSFBasicBlock {
-            input_SF: sf_log * 2,
-            output_SF: sf_log,
-          }),
-          *onnx::CQ_RANGE_LOWER,
-          *onnx::CQ_RANGE,
-        )),
-      }),
-      N: 1,
-    }));
 
     let mut unsq_shape = output_shape.clone();
     unsq_shape[output_shape.len() - 2] = 1;
@@ -156,8 +119,8 @@ impl Layer for MultiHeadMatMulLayer {
       input_shapes: vec![unsq_shape; util::next_pow(output_shape[output_shape.len() - 2] as u32) as usize],
     }));
     let multihead_output = graph.addNode(concat, inputs_to_concat);
-    let change_SF_output = graph.addNode(change_SF, vec![(multihead_output, 0)]);
-    let _ = graph.addNode(change_SF_check, vec![(multihead_output, 0), (change_SF_output, 0)]);
+    let change_SF_output =
+      super::add_fixed_point_rescale(&mut graph, (multihead_output, 0), sf_log * 2, sf_log, &output_shape);
     graph.outputs.push((change_SF_output, 0));
 
     (graph, vec![output_shape], vec![input_types[0]])

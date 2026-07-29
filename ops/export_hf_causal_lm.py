@@ -18,12 +18,50 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--prompt", required=True)
     result.add_argument("--sequence-length", type=int, required=True)
     result.add_argument("--opset", type=int, default=13)
+    result.add_argument(
+        "--weight-dtype", choices=("float32", "float16"), default="float32"
+    )
     result.add_argument("--output", type=pathlib.Path, required=True)
     return result
 
 
 def sha256(path: pathlib.Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    result = hashlib.sha256()
+    with path.open("rb") as source:
+        while block := source.read(1024 * 1024):
+            result.update(block)
+    return result.hexdigest()
+
+
+def canonicalize_unit_divisions(model: object) -> int:
+    import onnx
+
+    constants = {tensor.name: tensor for tensor in model.graph.initializer}
+    for node in model.graph.node:
+        if node.op_type == "Constant":
+            value = next(
+                (attribute.t for attribute in node.attribute if attribute.name == "value"),
+                None,
+            )
+            if value is not None:
+                constants[node.output[0]] = value
+
+    replacements = 0
+    for node in model.graph.node:
+        if node.op_type != "Div" or len(node.input) != 2:
+            continue
+        numerator = constants.get(node.input[0])
+        if numerator is None:
+            continue
+        values = onnx.numpy_helper.to_array(numerator)
+        if values.size != 1 or float(values.item()) != 1.0:
+            continue
+        denominator = node.input[1]
+        node.op_type = "Reciprocal"
+        del node.input[:]
+        node.input.append(denominator)
+        replacements += 1
+    return replacements
 
 
 def main() -> int:
@@ -47,10 +85,14 @@ def main() -> int:
         args.model, revision=resolved_revision, trust_remote_code=False
     )
     model = AutoModelForCausalLM.from_pretrained(
-        args.model, revision=resolved_revision, trust_remote_code=False
+        args.model,
+        revision=resolved_revision,
+        trust_remote_code=False,
+        attn_implementation="eager",
     )
     model.eval()
     model.config.use_cache = False
+    model.to(dtype=getattr(torch, args.weight_dtype))
 
     encoded = tokenizer(args.prompt, return_tensors="pt", add_special_tokens=False)
     input_ids = encoded["input_ids"][:, -args.sequence_length :]
@@ -58,15 +100,45 @@ def main() -> int:
         raise ValueError("prompt tokenizes to fewer tokens than the fixed sequence length")
 
     class NextTokenLogits(torch.nn.Module):
-        def __init__(self, causal_lm: torch.nn.Module):
+        def __init__(self, causal_lm: torch.nn.Module, sequence_length: int):
             super().__init__()
-            self.causal_lm = causal_lm
+            self.tied_word_embeddings = causal_lm.config.tie_word_embeddings
+            if self.tied_word_embeddings:
+                self.base_model = causal_lm.base_model
+            else:
+                self.causal_lm = causal_lm
+            self.register_buffer(
+                "position_ids",
+                torch.arange(sequence_length, dtype=torch.long).unsqueeze(0),
+                persistent=False,
+            )
+            self.precompute_causal_mask = causal_lm.config.model_type == "qwen2"
+            if self.precompute_causal_mask:
+                mask = torch.full(
+                    (sequence_length, sequence_length),
+                    torch.finfo(next(causal_lm.parameters()).dtype).min,
+                )
+                mask = torch.triu(mask, diagonal=1)[None, None, :, :]
+                self.register_buffer("causal_mask", mask, persistent=False)
 
         def forward(self, tokens: torch.Tensor) -> torch.Tensor:
-            logits = self.causal_lm(input_ids=tokens, use_cache=False).logits
+            kwargs = {"position_ids": self.position_ids}
+            if self.precompute_causal_mask:
+                kwargs["attention_mask"] = self.causal_mask
+            if self.tied_word_embeddings:
+                hidden_states = self.base_model(
+                    input_ids=tokens, use_cache=False, **kwargs
+                )[0]
+                logits = torch.nn.functional.linear(
+                    hidden_states, self.base_model.get_input_embeddings().weight
+                )
+            else:
+                logits = self.causal_lm(
+                    input_ids=tokens, use_cache=False, **kwargs
+                ).logits
             return logits[:, -1:, :]
 
-    wrapper = NextTokenLogits(model)
+    wrapper = NextTokenLogits(model, args.sequence_length)
     with torch.no_grad():
         reference = wrapper(input_ids)
 
@@ -79,7 +151,8 @@ def main() -> int:
         torch.onnx.export(
             wrapper,
             (input_ids,),
-            onnx_path,
+            str(onnx_path),
+            dynamo=False,
             input_names=["input_ids"],
             output_names=["next_token_logits"],
             dynamic_axes=None,
@@ -87,6 +160,9 @@ def main() -> int:
             opset_version=args.opset,
         )
         exported = onnx.load(onnx_path)
+        unit_divisions_canonicalized = canonicalize_unit_divisions(exported)
+        if unit_divisions_canonicalized:
+            onnx.save(exported, onnx_path)
         onnx.checker.check_model(exported, full_check=True)
         if any(tensor.data_location for tensor in exported.graph.initializer):
             raise ValueError("external ONNX tensor data is not supported")
@@ -104,11 +180,13 @@ def main() -> int:
             "prompt": args.prompt,
             "input_ids": input_ids.flatten().tolist(),
             "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
+            "weight_dtype": args.weight_dtype,
             "onnx_sha256": sha256(onnx_path),
             "onnx_operators": sorted({node.op_type for node in exported.graph.node}),
             "onnx_nodes": len(exported.graph.node),
             "onnx_opset": args.opset,
             "onnx_initializers": len(exported.graph.initializer),
+            "onnx_unit_divisions_canonicalized": unit_divisions_canonicalized,
             "output_shape": list(reference.shape),
             "reference_argmax": int(reference[0, -1].argmax()),
             "reference_argmax_logit": float(reference[0, -1].max()),

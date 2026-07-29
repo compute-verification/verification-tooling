@@ -18,15 +18,21 @@ pub struct MaxBasicBlock;
 impl BasicBlock for MaxBasicBlock {
   fn run(&self, _model: &ArrayD<Fr>, inputs: &Vec<&ArrayD<Fr>>) -> Result<Vec<ArrayD<Fr>>, util::CQOutOfRangeError> {
     assert!(inputs.len() == 1);
-    Ok(vec![arr1(&[inputs[0].fold(Fr::zero(), |max, x| {
-      let a: i128 = 1;
-      if *x < Fr::from(a << 127) && *x > max {
-        return *x;
-      } else {
-        return max;
-      }
-    })])
-    .into_dyn()])
+    let maximum = inputs[0].iter().map(|value| util::fr_to_int(*value)).max().expect("Max input cannot be empty");
+    Ok(vec![arr1(&[Fr::from(maximum)]).into_dyn()])
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use ndarray::arr1;
+
+  #[test]
+  fn max_basic_block_handles_all_negative_inputs() {
+    let input = arr1(&[Fr::from(-9_i64), Fr::from(-3_i64), Fr::from(-7_i64)]).into_dyn();
+    let output = MaxBasicBlock.run(&ArrayD::zeros(ndarray::IxDyn(&[0])), &vec![&input]).unwrap();
+    assert_eq!(util::fr_to_int(output[0][[0]]), -3);
   }
 }
 

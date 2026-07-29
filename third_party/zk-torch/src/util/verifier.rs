@@ -5,7 +5,7 @@
  */
 use crate::basic_block::{BasicBlock, Data, DataEnc, PairingCheck, SRS};
 use crate::graph::Graph;
-use crate::util::msm;
+use crate::util::{msm, ProverConfig, VerifierConfig};
 use crate::{onnx, util, CONFIG, LAYER_SETUP_DIR};
 use ark_bn254::{Fr, G1Affine, G1Projective, G2Affine, G2Projective};
 use ark_ec::bn::Bn;
@@ -32,6 +32,7 @@ pub fn combine_pairing_checks(checks: &Vec<&PairingCheck>) -> (Vec<G1Affine>, Ve
   let mut A = HashMap::new();
   let mut B = HashMap::new();
   let mut res: (Vec<G1Affine>, Vec<G2Affine>) = (Vec::new(), Vec::new());
+  let mut coefficients = HashMap::<(G1Affine, G2Affine), Fr>::new();
 
   let mut rng = StdRng::from_entropy();
   let gamma = Fr::rand(&mut rng);
@@ -43,10 +44,16 @@ pub fn combine_pairing_checks(checks: &Vec<&PairingCheck>) -> (Vec<G1Affine>, Ve
       if pairing.0.is_zero() || pairing.1.is_zero() {
         continue;
       }
-      A.entry(pairing.0).or_insert_with(|| HashSet::new()).insert((pairing.1, curr));
-      B.entry(pairing.1).or_insert_with(|| HashSet::new()).insert((pairing.0, curr));
+      *coefficients.entry(*pairing).or_insert_with(Fr::zero) += curr;
     }
     curr *= gamma;
+  }
+  for ((g1, g2), coefficient) in coefficients {
+    if coefficient.is_zero() {
+      continue;
+    }
+    A.entry(g1).or_insert_with(HashSet::new).insert((g2, coefficient));
+    B.entry(g2).or_insert_with(HashSet::new).insert((g1, coefficient));
   }
 
   fn get_xy<P: SWCurveConfig>(a: &Affine<P>) -> (P::BaseField, P::BaseField) {
@@ -102,27 +109,50 @@ pub fn combine_pairing_checks(checks: &Vec<&PairingCheck>) -> (Vec<G1Affine>, Ve
   res
 }
 
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use ark_bn254::{Bn254, G1Projective, G2Projective};
+  use ark_ec::pairing::Pairing;
+  use ark_ec::{CurveGroup, Group};
+
+  #[test]
+  fn pairing_combination_preserves_duplicate_terms() {
+    let g1 = G1Projective::generator().into_affine();
+    let g2 = G2Projective::generator().into_affine();
+    let negative_double_g1 = (-(G1Projective::generator() * Fr::from(2_u64))).into_affine();
+    let check = vec![(g1, g2), (g1, g2), (negative_double_g1, g2)];
+    let combined = combine_pairing_checks(&vec![&check]);
+
+    assert_eq!(Bn254::multi_pairing(combined.0, combined.1), PairingOutput::zero());
+  }
+}
+
 pub fn verify(srs: &SRS, graph: &Graph, timing: &mut TimingTree) {
+  verify_with_config(srs, graph, &CONFIG.prover, &CONFIG.verifier, timing);
+}
+
+pub fn verify_with_config(srs: &SRS, graph: &Graph, _prover_config: &ProverConfig, verifier_config: &VerifierConfig, timing: &mut TimingTree) {
   // Read Files:
-  let proofs = Vec::<(Vec<G1Affine>, Vec<G2Affine>, Vec<Fr>)>::deserialize_uncompressed(File::open(&CONFIG.verifier.proof_path).unwrap()).unwrap();
+  let proofs = Vec::<(Vec<G1Affine>, Vec<G2Affine>, Vec<Fr>)>::deserialize_uncompressed(File::open(&verifier_config.proof_path).unwrap()).unwrap();
   let proofs = proofs.iter().map(|x| (&x.0, &x.1, &x.2)).collect();
   #[cfg(feature = "fold")]
   let acc_proofs = Vec::<(Vec<G1Affine>, Vec<G2Affine>, Vec<Fr>, Vec<PairingOutput<Bn<ark_bn254::Config>>>)>::deserialize_uncompressed(
-    File::open(&CONFIG.prover.acc_proof_path).unwrap(),
+    File::open(&_prover_config.acc_proof_path).unwrap(),
   )
   .unwrap();
   #[cfg(feature = "fold")]
   let acc_proofs = acc_proofs.iter().map(|x| (&x.0, &x.1, &x.2, &x.3)).collect();
   let mut modelsEncBytes = Vec::new();
-  File::open(&CONFIG.verifier.enc_model_path).unwrap().read_to_end(&mut modelsEncBytes).unwrap();
+  File::open(&verifier_config.enc_model_path).unwrap().read_to_end(&mut modelsEncBytes).unwrap();
   let modelsEnc: Vec<ArrayD<DataEnc>> = bincode::deserialize(&modelsEncBytes).unwrap();
   let modelsEnc: Vec<&ArrayD<DataEnc>> = modelsEnc.iter().map(|model| model).collect();
   let mut inputsEncBytes = Vec::new();
-  File::open(&CONFIG.verifier.enc_input_path).unwrap().read_to_end(&mut inputsEncBytes).unwrap();
+  File::open(&verifier_config.enc_input_path).unwrap().read_to_end(&mut inputsEncBytes).unwrap();
   let inputsEnc: Vec<ArrayD<DataEnc>> = bincode::deserialize(&inputsEncBytes).unwrap();
   let inputsEnc: Vec<&ArrayD<DataEnc>> = inputsEnc.iter().map(|input| input).collect();
   let mut outputsEncBytes = Vec::new();
-  File::open(&CONFIG.verifier.enc_output_path).unwrap().read_to_end(&mut outputsEncBytes).unwrap();
+  File::open(&verifier_config.enc_output_path).unwrap().read_to_end(&mut outputsEncBytes).unwrap();
   let outputsEnc: Vec<Vec<ArrayD<DataEnc>>> = bincode::deserialize(&outputsEncBytes).unwrap();
   let outputsEnc: Vec<Vec<&ArrayD<DataEnc>>> = outputsEnc.iter().map(|output| output.iter().map(|x| x).collect()).collect();
   let outputsEnc: Vec<&Vec<&ArrayD<DataEnc>>> = outputsEnc.iter().map(|x| x).collect();
@@ -157,7 +187,7 @@ pub fn verify(srs: &SRS, graph: &Graph, timing: &mut TimingTree) {
       graph.verify(srs, &modelsEnc, &inputsEnc, &outputsEnc, &proofs, &acc_proofs, &mut rng, timing)
     );
     let final_proof = graph.fold_proofs(srs, final_proofs_idx, final_acc_proofs_idx, &proofs, &acc_proofs);
-    util::atomic_write_with(&CONFIG.prover.final_proof_path, |file| {
+    util::atomic_write_with(&_prover_config.final_proof_path, |file| {
       final_proof.serialize_uncompressed(file).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     })
     .unwrap();

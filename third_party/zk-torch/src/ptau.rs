@@ -9,15 +9,18 @@ pub fn load_file(filename: &str, n: usize, m: usize) -> SRS {
   let powers_length = 1 << n;
   let powers_g1_length = (powers_length << 1) - 1;
   let loaded_length = 1 << m;
-  assert!(loaded_length + 2 <= powers_g1_length, "ptau omits required G1 boundary powers");
+  assert!(loaded_length + 3 <= powers_g1_length, "ptau omits required G1 boundary powers");
   assert!(loaded_length < powers_length, "ptau omits required G2 boundary power");
 
   let mut file = File::open(filename).unwrap();
-  let mut bytes = vec![0; 64 * (loaded_length + 2)];
+  // Copy constraints blind an N-coefficient polynomial with a quadratic
+  // multiple of the vanishing polynomial, so an N-sized domain needs N+3
+  // monomial G1 powers.
+  let mut bytes = vec![0; 64 * (loaded_length + 3)];
   file.seek(SeekFrom::Start(64)).unwrap();
   file.read_exact(&mut bytes).unwrap();
 
-  let g1: Vec<G1Affine> = (0..loaded_length + 2)
+  let g1: Vec<G1Affine> = (0..loaded_length + 3)
     .into_par_iter()
     .map(|i| {
       let start = i * 64;
@@ -75,7 +78,7 @@ mod tests {
 
     let srs = load_file(path.to_str().unwrap(), 3, 2);
 
-    assert_eq!(srs.X1A.len(), 6);
+    assert_eq!(srs.X1A.len(), 7);
     assert_eq!(srs.X2A.len(), 5);
     assert_eq!(srs.Y1A, srs.X1A[3]);
     assert_eq!(srs.Y2A, srs.X2A[3]);

@@ -17,12 +17,12 @@ sp1:
 zktorch:
 	cargo +nightly-2025-06-30 build --release --manifest-path third_party/zk-torch/Cargo.toml \
 		--bin zk_torch --bin pocomp_admit --bin pocomp_verify \
-		--bin pocomp_sanitize_onnx --bin pocomp_infer
+		--bin pocomp_sanitize_onnx --bin pocomp_infer --bin pocomp_batch_prove
 
 zktorch-icicle:
 	cargo +nightly-2025-06-30 build --release --manifest-path third_party/zk-torch/Cargo.toml \
 		--features icicle --bin zk_torch --bin pocomp_admit --bin pocomp_verify \
-		--bin pocomp_sanitize_onnx --bin pocomp_infer
+		--bin pocomp_sanitize_onnx --bin pocomp_infer --bin pocomp_batch_prove
 
 zktorch-check:
 	cargo +nightly-2025-06-30 check --manifest-path third_party/zk-torch/Cargo.toml --all-targets

@@ -122,31 +122,12 @@ impl Layer for PowLayer {
       basic_block: Box::new(MulBasicBlock { len }),
       N: 1,
     }));
-    let change_SF = graph.addBB(Box::new(ChangeSFBasicBlock {
-      input_SF: sf_log * 2,
-      output_SF: sf_log,
-    }));
-    let change_SF_check = graph.addBB(Box::new(RepeaterBasicBlock {
-      basic_block: Box::new(CQ2BasicBlock {
-        n: input_shapes[0][input_shapes[0].len() - 1].next_power_of_two(),
-        setup: Some((
-          Box::new(ChangeSFBasicBlock {
-            input_SF: sf_log * 2,
-            output_SF: sf_log,
-          }),
-          *onnx::CQ_RANGE_LOWER,
-          *onnx::CQ_RANGE,
-        )),
-      }),
-      N: 1,
-    }));
     let mut mul_output = -1;
     let mut change_SF_output = -1;
     // TODO: when N > 2, it is better to use a more efficient way to calculate the power such as the way in nonlinear.rs
     for _i in 1..N {
       mul_output = graph.addNode(mul, vec![(-1, 0), (mul_output, 0)]);
-      change_SF_output = graph.addNode(change_SF, vec![(mul_output, 0)]);
-      let _ = graph.addNode(change_SF_check, vec![(mul_output, 0), (change_SF_output, 0)]);
+      change_SF_output = super::add_fixed_point_rescale(&mut graph, (mul_output, 0), sf_log * 2, sf_log, input_shapes[0]);
     }
 
     graph.outputs.push((change_SF_output, 0));

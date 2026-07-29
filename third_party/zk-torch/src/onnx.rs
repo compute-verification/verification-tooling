@@ -81,6 +81,18 @@ fn parse_onnx_constants<'a>(
             Fr::from(y as i32)
           }))
         }
+        DatumType::F16 => {
+          let tensor = tensor.cast_to::<f32>().unwrap().into_owned().into_array::<f32>().unwrap();
+          Ok(tensor.map(|x| {
+            let scaled = *x * SF_FLOAT.read().unwrap().to_owned();
+            if *x > 0.0 && scaled.round() == 0.0 {
+              return Fr::from(1);
+            }
+            let mut y = scaled.round();
+            y = y.clamp(-(1 << 15) as f32, (1 << 15) as f32);
+            Fr::from(y as i32)
+          }))
+        }
         DatumType::I64 => {
           let tensor = tensor.into_array::<i64>().unwrap();
           Ok(tensor.map(|x| Fr::from(*x)))
@@ -92,6 +104,10 @@ fn parse_onnx_constants<'a>(
         _ => Err(format!("Unsupported constant type: {:?}", tensor.datum_type())),
       }
       .unwrap();
+      let data_type = match data_type {
+        DatumType::F16 => DatumType::F32,
+        other => other,
+      };
       (tensor, data_type)
     } else {
       // if the data_location is not None, we generate fake weights for now.
@@ -257,8 +273,12 @@ fn update_graph_w_local_graph(
   let mut local_block_idx = vec![];
   let temp = local_graph.basic_blocks;
   for basic_block in temp.into_iter() {
-    let name = format!("{basic_block:?}");
-    let idx = *basic_blocks_idx.entry(name).or_insert_with(|| graph.basic_blocks.len());
+    let idx = if basic_block.can_deduplicate() {
+      let name = format!("{basic_block:?}");
+      *basic_blocks_idx.entry(name).or_insert_with(|| graph.basic_blocks.len())
+    } else {
+      graph.basic_blocks.len()
+    };
     local_block_idx.push(idx);
     if idx == graph.basic_blocks.len() {
       models.push((basic_block.genModel(), DatumType::I64));

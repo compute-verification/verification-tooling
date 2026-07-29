@@ -5,9 +5,10 @@
  */
 use crate::basic_block::{BasicBlock, Data, DataEnc, SRS};
 use crate::graph::Graph;
-use crate::util::{measure_file_size, verify};
+use crate::util::{measure_file_size, verify_with_config, Config, ProverConfig};
 use crate::{onnx, ptau, util, CONFIG, LAYER_SETUP_DIR};
 use ark_bn254::{Fr, G1Affine, G1Projective, G2Affine, G2Projective};
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::Zero;
@@ -19,6 +20,8 @@ use rayon::range;
 use sha3::{Digest, Keccak256};
 use std::fs::{self, File};
 use std::io::{self, Read};
+
+pub type ProverSetup = (Vec<G1Affine>, Vec<G2Affine>, Vec<DensePolynomial<Fr>>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CQArrayType {
@@ -141,13 +144,16 @@ pub fn prove(
   outputs: Vec<Vec<ArrayD<Fr>>>,
   setups: Vec<(&Vec<G1Affine>, &Vec<G2Affine>, &Vec<DensePolynomial<Fr>>)>,
   models: Vec<&ArrayD<Data>>,
+  models_enc_bytes: &[u8],
   graph: &mut Graph,
+  config: &ProverConfig,
   timing: &mut TimingTree,
 ) {
   // Encode Data:
-  let modelsEnc: Vec<ArrayD<DataEnc>> = util::vec_iter(&models).map(|model| (**model).map(|x| DataEnc::new(srs, x))).collect();
-  let inputs: Vec<ArrayD<Data>> = if let Some(path) = &CONFIG.prover.input_opening_path {
-    bincode::deserialize(&fs::read(path).expect("read committed input openings")).expect("decode committed input openings")
+  let inputs: Vec<ArrayD<Data>> = if let Some(path) = &config.input_opening_path {
+    timed!(timing, "load input openings", {
+      bincode::deserialize(&fs::read(path).expect("read committed input openings")).expect("decode committed input openings")
+    })
   } else {
     timed!(
       timing,
@@ -156,43 +162,53 @@ pub fn prove(
     )
   };
   let inputs: Vec<&ArrayD<Data>> = inputs.iter().map(|input| input).collect();
-  let inputsEnc: Vec<ArrayD<DataEnc>> = inputs.iter().map(|x| (*x).map(|y| DataEnc::new(srs, y))).collect();
+  let inputsEnc = timed!(timing, "encode input commitments", encode_data_arrays(srs, &inputs));
   let outputs: Vec<Vec<&ArrayD<Fr>>> = outputs.iter().map(|output| output.iter().map(|x| x).collect()).collect();
   let outputs: Vec<&Vec<&ArrayD<Fr>>> = outputs.iter().map(|output| output).collect();
   let mut encoded_outputs = timed!(timing, "encode outputs", graph.encodeOutputs(srs, &models, &inputs, &outputs, timing));
-  if let Some(path) = &CONFIG.prover.output_opening_path {
-    let committed: Vec<ArrayD<Data>> =
-      bincode::deserialize(&fs::read(path).expect("read committed output openings")).expect("decode committed output openings");
-    assert_eq!(committed.len(), graph.outputs.len(), "one committed opening is required per graph output");
-    for (opening, (node, output)) in committed.into_iter().zip(graph.outputs.iter()) {
-      let calculated = &encoded_outputs[*node as usize][*output];
-      assert_eq!(opening.shape(), calculated.shape(), "committed output shape mismatch");
-      for (index, (left, right)) in opening.iter().zip(calculated.iter()).enumerate() {
-        assert_eq!(
-          left.raw, right.raw,
-          "committed output does not match model execution at encoded element {index}"
-        );
+  if let Some(path) = &config.output_opening_path {
+    timed!(timing, "validate output openings", {
+      let committed: Vec<ArrayD<Data>> =
+        bincode::deserialize(&fs::read(path).expect("read committed output openings")).expect("decode committed output openings");
+      assert_eq!(committed.len(), graph.outputs.len(), "one committed opening is required per graph output");
+      for (opening, (node, output)) in committed.into_iter().zip(graph.outputs.iter()) {
+        let calculated = &encoded_outputs[*node as usize][*output];
+        assert_eq!(opening.shape(), calculated.shape(), "committed output shape mismatch");
+        for (index, (left, right)) in opening.iter().zip(calculated.iter()).enumerate() {
+          assert_eq!(
+            left.raw, right.raw,
+            "committed output does not match model execution at encoded element {index}"
+          );
+        }
+        encoded_outputs[*node as usize][*output] = opening;
       }
-      encoded_outputs[*node as usize][*output] = opening;
-    }
+    });
   }
   let outputs = encoded_outputs;
   let outputs: Vec<Vec<&ArrayD<Data>>> = outputs.iter().map(|outputs| outputs.iter().map(|x| x).collect()).collect();
   let outputs: Vec<&Vec<&ArrayD<Data>>> = outputs.iter().map(|x| x).collect();
-  let outputsEnc: Vec<Vec<ArrayD<DataEnc>>> =
-    outputs.iter().map(|output| (**output).iter().map(|x| (*x).map(|y| DataEnc::new(srs, y))).collect()).collect();
+  let outputsEnc: Vec<Vec<ArrayD<DataEnc>>> = timed!(timing, "encode output commitments", {
+    let widths: Vec<usize> = outputs.iter().map(|output| output.len()).collect();
+    let flattened: Vec<&ArrayD<Data>> = outputs.iter().flat_map(|output| output.iter().copied()).collect();
+    let mut encoded = encode_data_arrays(srs, &flattened).into_iter();
+    widths.into_iter().map(|width| encoded.by_ref().take(width).collect()).collect()
+  });
 
   // Save files:
-  let modelsEncBytes = bincode::serialize(&modelsEnc).unwrap();
-  let inputsEncBytes = bincode::serialize(&inputsEnc).unwrap();
-  let outputsEncBytes = bincode::serialize(&outputsEnc).unwrap();
-  util::atomic_write(&CONFIG.prover.enc_model_path, &modelsEncBytes).unwrap();
-  util::atomic_write(&CONFIG.prover.enc_input_path, &inputsEncBytes).unwrap();
-  util::atomic_write(&CONFIG.prover.enc_output_path, &outputsEncBytes).unwrap();
+  let (inputsEncBytes, outputsEncBytes) = timed!(
+    timing,
+    "serialize task commitments",
+    (bincode::serialize(&inputsEnc).unwrap(), bincode::serialize(&outputsEnc).unwrap(),)
+  );
+  timed!(timing, "write task commitments", {
+    util::atomic_write(&config.enc_model_path, models_enc_bytes).unwrap();
+    util::atomic_write(&config.enc_input_path, &inputsEncBytes).unwrap();
+    util::atomic_write(&config.enc_output_path, &outputsEncBytes).unwrap();
+  });
 
   // Fiat-Shamir:
   let mut hasher = Keccak256::new();
-  hasher.update(modelsEncBytes);
+  hasher.update(models_enc_bytes);
   hasher.update(inputsEncBytes);
   hasher.update(outputsEncBytes);
   let mut buf = [0u8; 32];
@@ -205,12 +221,16 @@ pub fn prove(
   #[cfg(not(feature = "fold"))]
   let proofs = timed!(timing, "prove", graph.prove(srs, &setups, &models, &inputs, &outputs, &mut rng, timing));
 
-  util::atomic_write_with(&CONFIG.prover.proof_path, |file| {
-    proofs.serialize_uncompressed(file).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-  })
-  .unwrap();
+  timed!(
+    timing,
+    "write proof",
+    util::atomic_write_with(&config.proof_path, |file| {
+      proofs.serialize_uncompressed(file).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    })
+    .unwrap()
+  );
   #[cfg(feature = "fold")]
-  util::atomic_write_with(&CONFIG.prover.acc_proof_path, |file| {
+  util::atomic_write_with(&config.acc_proof_path, |file| {
     acc_proofs.serialize_uncompressed(file).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
   })
   .unwrap();
@@ -219,33 +239,43 @@ pub fn prove(
 #[cfg(not(feature = "mock_prove"))]
 pub fn setup(srs: &SRS, graph: &Graph, models: &Vec<&ArrayD<Fr>>, timing: &mut TimingTree) {
   // Setup:
-  let models: Vec<ArrayD<Data>> = models
-    .par_iter()
-    .enumerate()
-    .map(|(i, model)| {
-      let bb = &graph.basic_blocks[i];
-      let bb_name = format!("{bb:?}");
-      let file_name = format!("{}.model", util::hash_str(&format!("{bb_name:?}")));
-      let file_path = format!("{}/{}", *LAYER_SETUP_DIR, file_name);
-      if util::file_exists(&file_path) {
-        println!("CQs: Loading layer model from file: {}", file_path);
-        let cached = fs::read(&file_path).ok().and_then(|bytes| bincode::deserialize(&bytes).ok());
-        if let Some(model) = cached {
-          return model;
+  let models: Vec<ArrayD<Data>> = crate::backend::with_cpu_backend(|| {
+    models
+      .par_iter()
+      .enumerate()
+      .map(|(i, model)| {
+        let bb = &graph.basic_blocks[i];
+        let bb_name = format!("{bb:?}");
+        let file_name = format!("{}.model", util::hash_str(&format!("{bb_name:?}")));
+        let file_path = format!("{}/{}", *LAYER_SETUP_DIR, file_name);
+        if util::file_exists(&file_path) {
+          println!("CQs: Loading layer model from file: {}", file_path);
+          let cached = fs::read(&file_path).ok().and_then(|bytes| bincode::deserialize(&bytes).ok());
+          if let Some(model) = cached {
+            return model;
+          }
+          eprintln!("CQs: Ignoring unreadable layer model cache: {file_path}");
         }
-        eprintln!("CQs: Ignoring unreadable layer model cache: {file_path}");
-      }
-      let model = convert_to_data(srs, model);
-      if bb_name.contains("CQ2BasicBlock") || bb_name.contains("CQBasicBlock") {
-        let modelBytes = bincode::serialize(&model).unwrap();
-        util::atomic_write(file_path, &modelBytes).unwrap();
-      }
-      model
-    })
-    .collect();
+        let model = convert_to_data(srs, model);
+        if bb_name.contains("CQ2BasicBlock") || bb_name.contains("CQBasicBlock") {
+          let modelBytes = bincode::serialize(&model).unwrap();
+          util::atomic_write(file_path, &modelBytes).unwrap();
+        }
+        model
+      })
+      .collect()
+  });
 
   let models_ref: Vec<&ArrayD<Data>> = models.iter().map(|model| model).collect();
   let setups = timed!(timing, "setup and encode models", graph.setup(srs, &models_ref));
+  let setups: Vec<ProverSetup> = timed!(
+    timing,
+    "batch normalize setup",
+    setups
+      .into_par_iter()
+      .map(|(g1, g2, polynomials)| { (G1Projective::normalize_batch(&g1), G2Projective::normalize_batch(&g2), polynomials,) })
+      .collect()
+  );
   // Save files:
   util::atomic_write_with(&CONFIG.prover.setup_path, |file| {
     setups.serialize_uncompressed(file).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
@@ -276,11 +306,15 @@ pub fn setup(
   (setups, models)
 }
 
-pub fn load_model() -> Vec<ArrayD<Data>> {
+pub fn load_model_from(path: &str) -> Vec<ArrayD<Data>> {
   let mut modelsBytes = Vec::new();
-  File::open(&CONFIG.prover.model_path).unwrap().read_to_end(&mut modelsBytes).unwrap();
+  File::open(path).unwrap().read_to_end(&mut modelsBytes).unwrap();
   let models: Vec<ArrayD<Data>> = bincode::deserialize(&modelsBytes).unwrap();
   models
+}
+
+pub fn load_model() -> Vec<ArrayD<Data>> {
+  load_model_from(&CONFIG.prover.model_path)
 }
 
 pub fn model_openings_match(models: &[ArrayD<Data>], raw_models: &[&ArrayD<Fr>]) -> bool {
@@ -294,69 +328,158 @@ pub fn model_openings_match(models: &[ArrayD<Data>], raw_models: &[&ArrayD<Fr>])
     })
 }
 
-pub fn zktorch_kernel() {
-  // Timing
-  let mut timing = TimingTree::default();
-  env_logger::init();
-
-  let srs = &ptau::load_file(&CONFIG.ptau.ptau_path, CONFIG.ptau.pow_len_log, CONFIG.ptau.loaded_pow_len_log);
-  let onnx_file_name = &CONFIG.onnx.model_path;
-  let (mut graph, models) = onnx::load_file(onnx_file_name);
-  let input_path = &CONFIG.onnx.input_path;
-  let inputs = if std::path::Path::new(input_path).exists() {
-    util::load_inputs_from_json_for_onnx(onnx_file_name, input_path)
-  } else {
-    util::generate_fake_inputs_for_onnx(onnx_file_name)
-  };
-  let inputs = inputs.iter().map(|x| x).collect();
-  let raw_models: Vec<&ArrayD<Fr>> = models.iter().map(|x| &x.0).collect();
-  let outputs = witness_gen(&inputs, &graph, &raw_models, &mut timing).expect("witness generation failed");
-
-  #[cfg(not(feature = "mock_prove"))]
-  if !CONFIG.prover.reuse_model_setup {
-    setup(&srs, &graph, &raw_models, &mut timing);
+pub fn encode_data_arrays(srs: &SRS, arrays: &[&ArrayD<Data>]) -> Vec<ArrayD<DataEnc>> {
+  let data: Vec<&Data> = arrays.iter().flat_map(|array| array.iter()).collect();
+  let projective: Vec<G1Projective> = data.par_iter().map(|data| data.g1 + srs.Y1P * data.r).collect();
+  let affine = G1Projective::normalize_batch(&projective);
+  for (index, point) in affine.iter().enumerate() {
+    assert!(
+      point.is_on_curve() && point.is_in_correct_subgroup_assuming_on_curve(),
+      "encoded commitment {index} is not a valid BN254 G1 subgroup point"
+    );
   }
-  #[cfg(feature = "mock_prove")]
-  let (setups, models) = setup(&srs, &graph, &models, &mut timing);
+  let mut affine = affine.into_iter();
 
-  // Load model and setup:
-  #[cfg(not(feature = "mock_prove"))]
-  let setups =
-    Vec::<(Vec<G1Projective>, Vec<G2Projective>, Vec<DensePolynomial<Fr>>)>::deserialize_uncompressed(File::open(&CONFIG.prover.setup_path).unwrap())
-      .unwrap();
-  let setups: Vec<(Vec<G1Affine>, Vec<G2Affine>, Vec<DensePolynomial<Fr>>)> = util::vec_iter(&setups)
-    .map(|x| {
-      (
-        util::vec_iter(&x.0).map(|y| (*y).into()).collect(),
-        util::vec_iter(&x.1).map(|y| (*y).into()).collect(),
-        util::vec_iter(&x.2).map(|y| (y.clone())).collect(),
+  arrays
+    .iter()
+    .map(|array| {
+      ArrayD::from_shape_vec(
+        array.raw_dim(),
+        array
+          .iter()
+          .map(|data| DataEnc {
+            len: data.raw.len(),
+            g1: affine.next().expect("one normalized commitment per opening"),
+          })
+          .collect(),
       )
+      .expect("encoded commitments preserve opening shapes")
     })
-    .collect();
-  let setups = setups.iter().map(|x| (&x.0, &x.1, &x.2)).collect();
+    .collect()
+}
 
-  #[cfg(not(feature = "mock_prove"))]
-  let models = load_model();
-  #[cfg(not(feature = "mock_prove"))]
-  assert!(
-    model_openings_match(&models, &raw_models),
-    "admitted model openings do not match the private ONNX model"
-  );
-  let models: Vec<&ArrayD<Data>> = models.iter().map(|model| model).collect();
+pub struct PreparedProver {
+  srs: SRS,
+  graph: Graph,
+  raw_models: Vec<ArrayD<Fr>>,
+  setups: Vec<ProverSetup>,
+  models: Vec<ArrayD<Data>>,
+  models_enc_bytes: Vec<u8>,
+  model_path: String,
+  ptau: crate::util::PtauConfig,
+  scale_factor: crate::util::ScaleFactorConfig,
+}
 
-  // Prove
-  prove(&srs, &inputs, outputs, setups, models, &mut graph, &mut timing);
+impl PreparedProver {
+  pub fn load(config: &Config, timing: &mut TimingTree) -> Self {
+    let srs = timed!(
+      timing,
+      "load SRS",
+      ptau::load_file(&config.ptau.ptau_path, config.ptau.pow_len_log, config.ptau.loaded_pow_len_log)
+    );
+    let (graph, raw_models) = timed!(timing, "compile ONNX graph", onnx::load_file(&config.onnx.model_path));
+    let raw_models: Vec<ArrayD<Fr>> = raw_models.into_iter().map(|model| model.0).collect();
+    let raw_model_refs: Vec<&ArrayD<Fr>> = raw_models.iter().collect();
 
-  // Verify
-  verify(&srs, &graph, &mut timing);
+    if !config.prover.reuse_model_setup {
+      setup(&srs, &graph, &raw_model_refs, timing);
+    }
 
-  // Measure proof size
-  measure_file_size(&CONFIG.prover.enc_model_path);
-  measure_file_size(&CONFIG.prover.enc_input_path);
-  measure_file_size(&CONFIG.prover.enc_output_path);
-  measure_file_size(&CONFIG.prover.proof_path);
-  #[cfg(feature = "fold")]
-  measure_file_size(&CONFIG.prover.final_proof_path);
+    let setups = timed!(
+      timing,
+      "load admitted setup",
+      // Admission hashes the complete setup artifact before this process starts.
+      // Rechecking every affine point here adds minutes without adding a second
+      // trust boundary; generated proofs are still checked by the verifier.
+      Vec::<ProverSetup>::deserialize_uncompressed_unchecked(File::open(&config.prover.setup_path).expect("open admitted setup"))
+        .expect("deserialize admitted setup")
+    );
+    let models = timed!(timing, "load model openings", load_model_from(&config.prover.model_path));
+    timed!(
+      timing,
+      "validate model openings",
+      assert!(
+        model_openings_match(&models, &raw_model_refs),
+        "admitted model openings do not match the private ONNX model"
+      )
+    );
+    let models_enc_bytes = timed!(timing, "encode admitted model", {
+      let model_refs: Vec<&ArrayD<Data>> = models.iter().collect();
+      let encoded = encode_data_arrays(&srs, &model_refs);
+      bincode::serialize(&encoded).expect("serialize admitted model commitments")
+    });
+    if config.prover.reuse_model_setup {
+      let admitted_model_path = config.prover.admitted_enc_model_path.as_ref().unwrap_or(&config.prover.enc_model_path);
+      let admitted = timed!(
+        timing,
+        "validate encoded model",
+        fs::read(admitted_model_path).expect("read admitted model commitments")
+      );
+      assert_eq!(admitted, models_enc_bytes, "admitted model commitments do not match model openings");
+    }
+
+    Self {
+      srs,
+      graph,
+      raw_models,
+      setups,
+      models,
+      models_enc_bytes,
+      model_path: config.onnx.model_path.clone(),
+      ptau: config.ptau.clone(),
+      scale_factor: config.sf.clone(),
+    }
+  }
+
+  fn validate_task_config(&self, config: &Config) {
+    assert_eq!(config.onnx.model_path, self.model_path, "prepared prover cannot switch private models");
+    assert_eq!(config.ptau, self.ptau, "prepared prover cannot switch SRS parameters");
+    assert_eq!(config.sf, self.scale_factor, "prepared prover cannot switch quantization parameters");
+    assert!(config.prover.reuse_model_setup, "prepared prover tasks must reuse admitted model setup");
+  }
+
+  pub fn prove_task(&mut self, config: &Config, timing: &mut TimingTree) {
+    self.validate_task_config(config);
+    let inputs = timed!(timing, "load task inputs", {
+      util::load_inputs_from_json_for_onnx(&config.onnx.model_path, &config.onnx.input_path)
+    });
+    let inputs: Vec<&ArrayD<Fr>> = inputs.iter().collect();
+    let raw_models: Vec<&ArrayD<Fr>> = self.raw_models.iter().collect();
+    let outputs = witness_gen(&inputs, &self.graph, &raw_models, timing).expect("witness generation failed");
+    let setups = self.setups.iter().map(|setup| (&setup.0, &setup.1, &setup.2)).collect();
+    let models: Vec<&ArrayD<Data>> = self.models.iter().collect();
+
+    timed!(
+      timing,
+      "build task proof",
+      prove(
+        &self.srs,
+        &inputs,
+        outputs,
+        setups,
+        models,
+        &self.models_enc_bytes,
+        &mut self.graph,
+        &config.prover,
+        timing,
+      )
+    );
+    verify_with_config(&self.srs, &self.graph, &config.prover, &config.verifier, timing);
+
+    measure_file_size(&config.prover.enc_model_path);
+    measure_file_size(&config.prover.enc_input_path);
+    measure_file_size(&config.prover.enc_output_path);
+    measure_file_size(&config.prover.proof_path);
+    #[cfg(feature = "fold")]
+    measure_file_size(&config.prover.final_proof_path);
+  }
+}
+
+pub fn zktorch_kernel() {
+  env_logger::init();
+  let mut timing = TimingTree::default();
+  let mut prover = PreparedProver::load(&CONFIG, &mut timing);
+  prover.prove_task(&CONFIG, &mut timing);
   timing.print();
   println!("Cargo run was successful.");
 }

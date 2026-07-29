@@ -176,6 +176,13 @@ pub type AccProofAffineRef<'a> = (
 );
 
 pub trait BasicBlock: std::fmt::Debug + Send + Sync + downcast_rs::Downcast {
+  // Blocks whose generated model contains private parameters must remain distinct.
+  // Deduplicating them by a value-dependent Debug string makes sanitized and
+  // private ONNX graphs compile to different model indices.
+  fn can_deduplicate(&self) -> bool {
+    true
+  }
+
   fn genModel(&self) -> ArrayD<Fr> {
     ArrayD::zeros(IxDyn(&[0]))
   }
@@ -344,6 +351,28 @@ impl AccProofLayout for DefaultBasicBlock {
       errs: vec![],
       acc_errs: vec![],
     }
+  }
+}
+
+#[cfg(test)]
+mod pocomp_tests {
+  use super::{BasicBlock, CQLinBasicBlock, IdBasicBlock, RepeaterBasicBlock};
+  use ark_bn254::Fr;
+  use ndarray::{ArrayD, IxDyn};
+
+  #[test]
+  fn private_model_blocks_are_not_deduplicated() {
+    let cqlin = CQLinBasicBlock {
+      setup: ArrayD::<Fr>::zeros(IxDyn(&[2, 2])),
+    };
+    assert!(!cqlin.can_deduplicate());
+
+    let repeated = RepeaterBasicBlock {
+      basic_block: Box::new(cqlin),
+      N: 2,
+    };
+    assert!(!repeated.can_deduplicate());
+    assert!(IdBasicBlock.can_deduplicate());
   }
 }
 

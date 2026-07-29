@@ -6,7 +6,7 @@ use ark_poly::univariate::DensePolynomial;
 use ark_std::UniformRand;
 use ark_std::{One, Zero};
 use core::panic;
-use ndarray::{arr0, concatenate, s, ArrayD, Axis, IxDyn};
+use ndarray::{arr0, arr1, concatenate, s, ArrayD, Axis, IxDyn};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -176,7 +176,7 @@ fn testBasicBlock<BB: BasicBlock>(basic_block: BB, srs: &SRS, model: &ArrayD<Fr>
 
 #[test]
 fn testBasicBlocks() {
-  let srs = &ptau::load_file("challenge", 7, 7);
+  let srs = &ptau::load_file("challenge", 7, 6);
   let mut rng = StdRng::from_entropy();
   let N: usize = 1 << 6;
   let n: usize = 1 << 3;
@@ -356,9 +356,22 @@ fn testBasicBlocks() {
 }
 
 #[test]
+fn test_div_const_signed_half_ties() {
+  let srs = &ptau::load_file("challenge", 7, 6);
+  let empty = ArrayD::zeros(IxDyn(&[0]));
+  let signed_half_ties = arr1(&[-40_i64, -24, -8, -8, 8, 8, 24, 40]).mapv(Fr::from).into_dyn();
+  testBasicBlock(
+    DivConstProofBasicBlock { c: 16 },
+    srs,
+    &empty,
+    &vec![&signed_half_ties],
+  );
+}
+
+#[test]
 fn test_max() {
   let CQ_RANGE_LOWER: i128 = -(1 << 5);
-  let srs = &ptau::load_file("challenge", 7, 7);
+  let srs = &ptau::load_file("challenge", 7, 6);
   let empty = ArrayD::zeros(IxDyn(&[0]));
   let a = ArrayD::from_shape_vec(IxDyn(&[2]), vec![1, 0].into_iter().map(|x| Fr::from(x)).collect()).unwrap();
   testBasicBlock(
@@ -391,7 +404,7 @@ fn test_max() {
 
 #[test]
 fn test_copy_constraint() {
-  let srs = &ptau::load_file("challenge", 7, 7);
+  let srs = &ptau::load_file("challenge", 7, 6);
   let empty = ArrayD::zeros(IxDyn(&[0]));
   let permutation = ArrayD::from_shape_vec(vec![4], vec![Some(IxDyn(&[3])), Some(IxDyn(&[2])), Some(IxDyn(&[1])), Some(IxDyn(&[0]))]).unwrap();
   // reverse

@@ -36,7 +36,13 @@ pub(crate) fn msm_g1(bases: &[ArkG1Affine], scalars: &[Fr]) -> ArkG1Projective {
   let scalars = HostOrDeviceSlice::on_host(convert_scalars(scalars));
   let mut output = HostOrDeviceSlice::on_host(vec![G1Projective::zero()]);
   msm::<CurveCfg>(&scalars, &points, &MSMConfig::default(), &mut output).expect("ICICLE G1 MSM failed");
-  output.as_slice()[0].to_ark()
+  let result: ArkG1Projective = output.as_slice()[0].to_ark();
+  let affine = result.into_affine();
+  assert!(
+    affine.is_on_curve() && affine.is_in_correct_subgroup_assuming_on_curve(),
+    "ICICLE G1 MSM returned a point outside the BN254 G1 subgroup"
+  );
+  result
 }
 
 pub(crate) fn msm_g2(bases: &[ArkG2Affine], scalars: &[Fr]) -> ArkG2Projective {
@@ -48,7 +54,13 @@ pub(crate) fn msm_g2(bases: &[ArkG2Affine], scalars: &[Fr]) -> ArkG2Projective {
   let scalars = HostOrDeviceSlice::on_host(convert_scalars(scalars));
   let mut output = HostOrDeviceSlice::on_host(vec![G2Projective::zero()]);
   msm::<G2CurveCfg>(&scalars, &points, &MSMConfig::default(), &mut output).expect("ICICLE G2 MSM failed");
-  output.as_slice()[0].to_ark()
+  let result: ArkG2Projective = output.as_slice()[0].to_ark();
+  let affine = result.into_affine();
+  assert!(
+    affine.is_on_curve() && affine.is_in_correct_subgroup_assuming_on_curve(),
+    "ICICLE G2 MSM returned a point outside the BN254 G2 subgroup"
+  );
+  result
 }
 
 pub(crate) fn fft_g1(domain: GeneralEvaluationDomain<Fr>, values: &[ArkG1Projective], inverse: bool) -> Vec<ArkG1Projective> {
@@ -75,7 +87,7 @@ pub(crate) fn fft_g1(domain: GeneralEvaluationDomain<Fr>, values: &[ArkG1Project
     .collect();
   let mut output = vec![G1Projective::zero(); values.len()];
   let direction = if inverse { NTTDir::kInverse } else { NTTDir::kForward };
-  unsafe {
+  let result = unsafe {
     bn254_ecntt_cuda(
       input.as_ptr(),
       input.len().try_into().expect("ICICLE ECNTT input is too large"),
@@ -84,8 +96,8 @@ pub(crate) fn fft_g1(domain: GeneralEvaluationDomain<Fr>, values: &[ArkG1Project
       output.as_mut_ptr(),
     )
     .wrap()
-    .expect("ICICLE G1 ECNTT failed");
-  }
+  };
+  result.expect("ICICLE G1 ECNTT failed");
   output.iter().map(ArkConvertible::to_ark).collect()
 }
 
@@ -97,6 +109,7 @@ mod tests {
   use ark_ec::{CurveGroup, Group};
   use ark_ff::{Field, PrimeField};
   use ark_std::Zero;
+  use rayon::prelude::*;
 
   fn full_width_scalar(value: usize) -> Fr {
     let mut bytes = [0_u8; 32];
@@ -149,6 +162,18 @@ mod tests {
     let scalars: Vec<Fr> = (1..=8).map(Fr::from).collect();
     let bases: Vec<ArkG1Affine> = (1..=16).map(|value| (ArkG1Projective::generator() * Fr::from(value)).into_affine()).collect();
     assert_eq!(msm_g1(&bases, &scalars), cpu::msm::<ArkG1Projective>(&bases, &scalars));
+  }
+
+  #[test]
+  fn concurrent_icicle_g1_msm_matches_cpu() {
+    let size = 8192;
+    let scalars: Vec<Fr> = (0..size).map(full_width_scalar).collect();
+    let bases: Vec<ArkG1Affine> = (0..size)
+      .map(|value| (ArkG1Projective::generator() * full_width_scalar(value + size)).into_affine())
+      .collect();
+    let expected = cpu::msm::<ArkG1Projective>(&bases, &scalars);
+    let results: Vec<ArkG1Projective> = (0..64).into_par_iter().map(|_| msm_g1(&bases, &scalars)).collect();
+    assert!(results.into_iter().all(|result| result == expected));
   }
 
   #[test]

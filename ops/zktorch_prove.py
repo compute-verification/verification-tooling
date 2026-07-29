@@ -89,12 +89,10 @@ def main() -> int:
         input_json.write_text(
             json.dumps({"input_data_quantized": [tensor["values"]]}, separators=(",", ":"))
         )
-        for name in ("models", "setups", "modelsEnc"):
-            shutil.copyfile(args.admission / name, work / name)
         shutil.copyfile(args.public_onnx, work / "architecture.onnx")
         shutil.copyfile(args.tensor_spec, work / "tensor_spec.json")
         shutil.copyfile(args.admission / "admission.json", work / "admission.json")
-        admitted_model_hash = raw_sha256(work / "modelsEnc")
+        admitted_model_hash = raw_sha256(args.admission / "modelsEnc")
 
         prove_config = config(
             task=str(statement["task_id"]),
@@ -106,13 +104,14 @@ def main() -> int:
             input_opening=args.input_opening.resolve(strict=True),
             output_opening=args.output_opening.resolve(strict=True),
             reuse_model_setup=True,
+            admission_root=args.admission.resolve(strict=True),
         )
         config_path = work / "prove-config.json"
         config_path.write_text(json.dumps(prove_config))
         subprocess.run(
             [str(args.zktorch.resolve(strict=True)), str(config_path)], check=True
         )
-        if raw_sha256(work / "modelsEnc") != admitted_model_hash:
+        if raw_sha256(args.admission / "modelsEnc") != admitted_model_hash:
             raise ValueError("zkTorch replaced the admitted model commitment")
 
         verify_config = config(

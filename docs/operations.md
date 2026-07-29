@@ -23,8 +23,9 @@ that physical fact.
    then have the auditor sign the complete `AuditContract` with
    `pocomp sign-contract`.
 3. Sanitize the private ONNX model with `pocomp_sanitize_onnx`. The v1
-   sanitizer accepts exactly one fixed-shape input, one fixed-shape output, and
-   only `MatMul`, `Add`, `Relu`, and `Identity`.
+   sanitizer accepts exactly one fixed-shape input and output, rejects
+   unsupported operators and external weight data, verifies how each
+   initializer is used, then zeroes every private initializer.
 4. Run `ops/zktorch_admit.py` once. It creates randomized private `models` and
    `setups`, public `modelsEnc` and `admission.json`, and the corresponding
    `task_program.json`. Refuse to replace this directory after the audit
@@ -93,7 +94,30 @@ remains CPU. Small MSMs, scalar-field FFT, G2 group FFT, and element-wise G1
 scalar multiplication remain on the CPU because the pinned public ICICLE
 release does not provide useful entry points for all of them. See
 [`../third_party/zk-torch/ACCELERATION.md`](../third_party/zk-torch/ACCELERATION.md)
-for the runtime controls and validated proof matrix.
+for the runtime controls and validated proof matrix. ICICLE failures are fatal:
+the prover does not substitute CPU results after CUDA errors, invalid curve
+points, or parity mismatches.
+
+Admission stores proving-key curve points in affine form, which is the
+representation consumed by task proving. Admissions created before artifact
+format `pocomp-zktorch-affine-v2` must be regenerated; they are rejected rather
+than ambiguously decoded.
+
+The admission wrapper verifies the SHA-256 digest of every admitted artifact
+before invoking the prover. The prepared prover therefore skips a redundant
+per-point curve validation pass while loading the integrity-checked setup.
+Proof artifacts remain untrusted input and are fully validated by the external
+verifier.
+
+Build `pocomp_batch_prove` alongside `zk_torch`. When it is present next to the
+configured `zk_torch` executable, `task_pocomp.py` automatically prepares the
+SRS, ONNX graph, proving setup, and model openings once and reuses that
+validated in-memory state for every sampled task. Each task still gets
+independent committed inputs and outputs, Fiat-Shamir transcript, proof files,
+external verification, and self-contained proof artifact. The single-task
+`zktorch_prove.py` path remains available, but also references immutable
+admission artifacts in place instead of copying them into its temporary
+workspace.
 
 ## Sealing and proving
 

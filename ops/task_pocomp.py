@@ -24,6 +24,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--pocomp", type=pathlib.Path, required=True)
     result.add_argument("--sp1", type=pathlib.Path, required=True)
     result.add_argument("--zktorch", type=pathlib.Path, required=True)
+    result.add_argument("--zktorch-batch", type=pathlib.Path)
     result.add_argument("--zktorch-verifier", type=pathlib.Path, required=True)
     result.add_argument("--output", type=pathlib.Path, required=True)
     return result
@@ -43,6 +44,13 @@ def main() -> int:
     pocomp = str(args.pocomp.resolve(strict=True))
     sp1 = str(args.sp1.resolve(strict=True))
     prove_script = pathlib.Path(__file__).with_name("zktorch_prove.py")
+    batch_script = pathlib.Path(__file__).with_name("zktorch_batch_prove.py")
+    batch_binary = (
+        args.zktorch_batch
+        if args.zktorch_batch is not None
+        else args.zktorch.with_name("pocomp_batch_prove")
+    )
+    use_batch = batch_binary.is_file()
 
     with tempfile.TemporaryDirectory(
         prefix=f".{args.output.name}-", dir=args.output.parent
@@ -61,6 +69,8 @@ def main() -> int:
         relation = json.loads(prepared_path.read_text())
         epoch_id = relation["epoch"]["epoch_id"]
         task_proofs: list[dict[str, object]] = []
+        batch_jobs: list[dict[str, str]] = []
+        pending_batch: list[tuple[dict[str, object], pathlib.Path]] = []
         proof_dir = work / "zktorch"
         proof_dir.mkdir()
 
@@ -77,14 +87,74 @@ def main() -> int:
                 [pocomp, "digest-zktorch", str(statement_path)]
             )
             artifact_path = proof_dir / f"{input_id}.proof.json"
+            if use_batch:
+                batch_jobs.append(
+                    {
+                        "statement": str(statement_path),
+                        "statement_digest": statement_digest,
+                        "input_tensor": str(
+                            (args.bodies / f"{input_id}.json").resolve(strict=True)
+                        ),
+                        "input_opening": str(
+                            (args.openings / f"{input_id}.opening").resolve(strict=True)
+                        ),
+                        "output_opening": str(
+                            (args.openings / f"{output_id}.opening").resolve(strict=True)
+                        ),
+                        "output": str(artifact_path),
+                    }
+                )
+                pending_batch.append((statement, artifact_path))
+            else:
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(prove_script),
+                        "--statement",
+                        str(statement_path),
+                        "--statement-digest",
+                        statement_digest,
+                        "--admission",
+                        str(args.admission.resolve(strict=True)),
+                        "--private-onnx",
+                        str(args.private_onnx.resolve(strict=True)),
+                        "--public-onnx",
+                        str(args.public_onnx.resolve(strict=True)),
+                        "--tensor-spec",
+                        str(args.tensor_spec.resolve(strict=True)),
+                        "--input-tensor",
+                        str((args.bodies / f"{input_id}.json").resolve(strict=True)),
+                        "--input-opening",
+                        str((args.openings / f"{input_id}.opening").resolve(strict=True)),
+                        "--output-opening",
+                        str((args.openings / f"{output_id}.opening").resolve(strict=True)),
+                        "--ptau",
+                        str(args.ptau.resolve(strict=True)),
+                        "--zktorch",
+                        str(args.zktorch.resolve(strict=True)),
+                        "--verifier",
+                        str(args.zktorch_verifier.resolve(strict=True)),
+                        "--output",
+                        str(artifact_path),
+                    ],
+                    check=True,
+                )
+                task_proofs.append(
+                    {
+                        "statement": statement,
+                        "proof": json.loads(artifact_path.read_text()),
+                    }
+                )
+
+        if use_batch:
+            jobs_path = proof_dir / "batch-jobs.json"
+            jobs_path.write_text(json.dumps(batch_jobs, separators=(",", ":")))
             subprocess.run(
                 [
                     sys.executable,
-                    str(prove_script),
-                    "--statement",
-                    str(statement_path),
-                    "--statement-digest",
-                    statement_digest,
+                    str(batch_script),
+                    "--jobs",
+                    str(jobs_path),
                     "--admission",
                     str(args.admission.resolve(strict=True)),
                     "--private-onnx",
@@ -93,25 +163,21 @@ def main() -> int:
                     str(args.public_onnx.resolve(strict=True)),
                     "--tensor-spec",
                     str(args.tensor_spec.resolve(strict=True)),
-                    "--input-tensor",
-                    str((args.bodies / f"{input_id}.json").resolve(strict=True)),
-                    "--input-opening",
-                    str((args.openings / f"{input_id}.opening").resolve(strict=True)),
-                    "--output-opening",
-                    str((args.openings / f"{output_id}.opening").resolve(strict=True)),
                     "--ptau",
                     str(args.ptau.resolve(strict=True)),
-                    "--zktorch",
-                    str(args.zktorch.resolve(strict=True)),
+                    "--zktorch-batch",
+                    str(batch_binary.resolve(strict=True)),
                     "--verifier",
                     str(args.zktorch_verifier.resolve(strict=True)),
-                    "--output",
-                    str(artifact_path),
                 ],
                 check=True,
             )
-            task_proofs.append(
-                {"statement": statement, "proof": json.loads(artifact_path.read_text())}
+            task_proofs.extend(
+                {
+                    "statement": statement,
+                    "proof": json.loads(artifact_path.read_text()),
+                }
+                for statement, artifact_path in pending_batch
             )
 
         relation_proof_path = work / "task_relation_proof.json"

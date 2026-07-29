@@ -16,7 +16,7 @@ Build with `--features icicle`, then opt in at runtime with
 backend. Unsupported accelerator names fail immediately.
 
 `ZKTORCH_ICICLE_MSM` and `ZKTORCH_ICICLE_ECNTT` independently accept `icicle`
-(the default) or `cpu`. CPU overrides print a one-time fallback notice. They
+(the default) or `cpu`. CPU overrides print a one-time notice. They
 support explicit compatibility diagnosis and benchmarking without requiring
 separate binaries.
 
@@ -63,7 +63,8 @@ An accelerated backend must:
 4. pass CPU/GPU parity tests for each primitive;
 5. generate proofs accepted by the existing CPU verifier;
 6. preserve the admission, statement, and exact tensor commitments;
-7. fall back to the CPU only through an explicit, observable policy.
+7. fail immediately on CUDA errors, invalid curve points, or parity failures
+   instead of substituting a CPU result.
 
 Proof bytes are randomized and need not be identical. Parity is established by
 equal public statements and commitments plus successful verification.
@@ -81,6 +82,14 @@ GPU-created admissions. Every GPU primitive was CPU parity-checked at runtime,
 and every resulting proof passed the unchanged CPU verifier. See
 [`../../docs/icicle-test-report-2026-07-28.md`](../../docs/icicle-test-report-2026-07-28.md).
 
+A later Qwen2.5-0.5B run on an RTX 5090 returned an invalid ICICLE result for a
+1,024-scalar MSM. The implementation used for that historical run disabled MSM
+acceleration and completed the proof on CPU. The backend now fails immediately
+for the same condition rather than changing execution backends. The
+small-fixture matrix therefore does not establish compatibility or performance
+for every GPU, driver, and workload. See
+[`../../docs/qwen2.5-0.5b-proof-test-2026-07-29.md`](../../docs/qwen2.5-0.5b-proof-test-2026-07-29.md).
+
 ## Benchmark baseline
 
 Benchmark admission separately from per-task proving. Within per-task proving,
@@ -95,5 +104,6 @@ record at least:
 - CPU verification.
 
 The tiny admitted ONNX fixture used by the Task-PoComp completion test is the
-correct correctness smoke test. Performance decisions should also use a larger
-supported model so fixed transfer and initialization costs do not dominate.
+correct correctness smoke test. Performance decisions must also use the target
+GPU and model scale, with runtime validation enabled, because the Qwen result
+did not reproduce the tiny-fixture ICICLE behavior.

@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 
 from zktorch_common import (
+    ADMISSION_FORMAT,
     ADMISSION_FILES,
     PIN,
     PROTOCOL_VERSION,
@@ -89,6 +90,7 @@ def main() -> int:
         admission = {
             "protocol_version": PROTOCOL_VERSION,
             "proof_system_version": PIN,
+            "artifact_format": ADMISSION_FORMAT,
             "architecture_digest": protocol_hash_file(args.public_onnx),
             "tensor_spec_digest": protocol_hash_file(args.tensor_spec),
             "model_commitment": protocol_hash_file(work / "modelsEnc"),
