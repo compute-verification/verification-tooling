@@ -16,7 +16,7 @@ pub use copy_constraint::CopyConstraintBasicBlock;
 pub use cq::CQBasicBlock;
 pub use cq2::CQ2BasicBlock;
 pub use cqlin::CQLinBasicBlock;
-pub use div::{DivConstBasicBlock, DivConstProofBasicBlock, DivScalarBasicBlock, ModConstBasicBlock};
+pub use div::{DivConstBasicBlock, DivConstProofBasicBlock, DivFloorConstBasicBlock, DivScalarBasicBlock, ModConstBasicBlock};
 use downcast_rs::impl_downcast;
 pub use eq::{ElementwiseEqBasicBlock, EqBasicBlock};
 pub use id::IdBasicBlock;

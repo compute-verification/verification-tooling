@@ -7,6 +7,8 @@ compile_error!("the upstream zkTorch folding path is unsound and is disabled in 
 compile_error!("mock proving is not a proof and is disabled in the PoComp fork");
 pub(crate) mod backend;
 pub mod basic_block;
+pub mod cupow;
+pub mod cupow_proof;
 pub mod graph;
 pub mod layer;
 pub mod onnx;
@@ -40,6 +42,20 @@ pub static CONFIG: Lazy<util::Config> = Lazy::new(|| {
   file.read_to_string(&mut contents).expect("Could not read config");
 
   serde_yaml::from_str(&contents).expect("Could not parse config")
+});
+
+pub static ENABLE_LAYER_SETUP: Lazy<bool> = Lazy::new(|| {
+  if let Ok(value) = env::var("ZKTORCH_ENABLE_LAYER_SETUP") {
+    return value == "1" || value.eq_ignore_ascii_case("true");
+  }
+  let path = env::var("ZKTORCH_CONFIG").ok().or_else(|| env::args().nth(1));
+  let Some(path) = path.filter(|path| Path::new(path).is_file()) else {
+    return false;
+  };
+  let Ok(contents) = fs::read_to_string(path) else {
+    return false;
+  };
+  serde_yaml::from_str::<util::Config>(&contents).map(|config| config.prover.enable_layer_setup).unwrap_or(false)
 });
 
 pub static LAYER_SETUP_DIR: Lazy<String> = Lazy::new(|| {

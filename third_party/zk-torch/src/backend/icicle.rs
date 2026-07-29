@@ -168,9 +168,7 @@ mod tests {
   fn concurrent_icicle_g1_msm_matches_cpu() {
     let size = 8192;
     let scalars: Vec<Fr> = (0..size).map(full_width_scalar).collect();
-    let bases: Vec<ArkG1Affine> = (0..size)
-      .map(|value| (ArkG1Projective::generator() * full_width_scalar(value + size)).into_affine())
-      .collect();
+    let bases: Vec<ArkG1Affine> = (0..size).map(|value| (ArkG1Projective::generator() * full_width_scalar(value + size)).into_affine()).collect();
     let expected = cpu::msm::<ArkG1Projective>(&bases, &scalars);
     let results: Vec<ArkG1Projective> = (0..64).into_par_iter().map(|_| msm_g1(&bases, &scalars)).collect();
     assert!(results.into_iter().all(|result| result == expected));

@@ -232,6 +232,7 @@ fn testBasicBlocks() {
   testBasicBlock(MulConstBasicBlock { c: 12345 }, srs, &empty, &vec![&a]);
   testBasicBlock(MulScalarBasicBlock {}, srs, &empty, &vec![&a, &a_0]);
   testBasicBlock(DivConstProofBasicBlock { c: 16 }, srs, &empty, &vec![&a_d]);
+  testBasicBlock(DivFloorConstBasicBlock { c: 251 }, srs, &empty, &vec![&a_d]);
   let a_1 = a_d.clone().into_shape(vec![8, 8]).unwrap();
   testBasicBlock(DivConstProofBasicBlock { c: 16 }, srs, &empty, &vec![&a_1]);
   testBasicBlock(AddBasicBlock {}, srs, &empty, &vec![&a_0, &b]);
@@ -360,12 +361,7 @@ fn test_div_const_signed_half_ties() {
   let srs = &ptau::load_file("challenge", 7, 6);
   let empty = ArrayD::zeros(IxDyn(&[0]));
   let signed_half_ties = arr1(&[-40_i64, -24, -8, -8, 8, 8, 24, 40]).mapv(Fr::from).into_dyn();
-  testBasicBlock(
-    DivConstProofBasicBlock { c: 16 },
-    srs,
-    &empty,
-    &vec![&signed_half_ties],
-  );
+  testBasicBlock(DivConstProofBasicBlock { c: 16 }, srs, &empty, &vec![&signed_half_ties]);
 }
 
 #[test]

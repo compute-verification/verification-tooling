@@ -1,4 +1,7 @@
-use crate::basic_block::{CQBasicBlock, DivConstProofBasicBlock, PermuteBasicBlock, RepeaterBasicBlock, ReshapeBasicBlock, SplitBasicBlock};
+use crate::basic_block::{
+  AddBasicBlock, CQBasicBlock, DivConstProofBasicBlock, DivFloorConstBasicBlock, MatMulBasicBlock, PermuteBasicBlock, RepeaterBasicBlock,
+  ReshapeBasicBlock, SplitBasicBlock, SubBasicBlock,
+};
 use crate::graph::Graph;
 use crate::util::{self, CQArrayType};
 pub use and::AndLayer;
@@ -95,16 +98,97 @@ pub mod transpose;
 pub mod r#where;
 pub mod xor;
 
+/// Adds a matrix multiplication reduced exactly modulo 251.
+///
+/// The returned node exposes quotient at slot 0, F251 residues at slot 1, and
+/// the upper-bound witness at slot 2. Both bounded witnesses are lookup-checked.
+pub fn add_f251_matmul(
+  graph: &mut Graph,
+  left: (i32, usize),
+  transposed_right: (i32, usize),
+  inner: usize,
+  columns: usize,
+  output_shape: &[usize],
+) -> i32 {
+  let matmul = graph.addBB(Box::new(MatMulBasicBlock { m: inner, n: columns }));
+  let raw = graph.addNode(matmul, vec![left, transposed_right]);
+  let reduce = graph.addBB(Box::new(DivFloorConstBasicBlock { c: 251 }));
+  let reduced = graph.addNode(reduce, vec![(raw, 0)]);
+  add_f251_range_check(graph, (reduced, 1), output_shape);
+  add_f251_range_check(graph, (reduced, 2), output_shape);
+  reduced
+}
+
+/// Adds two equally shaped F251 tensors and reduces the result modulo 251.
+pub fn add_f251_add(graph: &mut Graph, left: (i32, usize), right: (i32, usize), output_shape: &[usize]) -> i32 {
+  assert!(!output_shape.is_empty());
+  let add = graph.addBB(Box::new(RepeaterBasicBlock {
+    basic_block: Box::new(AddBasicBlock),
+    N: output_shape.len() - 1,
+  }));
+  let raw = graph.addNode(add, vec![left, right]);
+  add_f251_reduce(graph, (raw, 0), output_shape)
+}
+
+/// Computes `left - right` over F251 using a verifier-known tensor of 251s.
+pub fn add_f251_sub(graph: &mut Graph, left: (i32, usize), right: (i32, usize), modulus: (i32, usize), output_shape: &[usize]) -> i32 {
+  assert!(!output_shape.is_empty());
+  let repeat = output_shape.len() - 1;
+  let sub = graph.addBB(Box::new(RepeaterBasicBlock {
+    basic_block: Box::new(SubBasicBlock),
+    N: repeat,
+  }));
+  let complement = graph.addNode(sub, vec![modulus, right]);
+  let add = graph.addBB(Box::new(RepeaterBasicBlock {
+    basic_block: Box::new(AddBasicBlock),
+    N: repeat,
+  }));
+  let raw = graph.addNode(add, vec![left, (complement, 0)]);
+  add_f251_reduce(graph, (raw, 0), output_shape)
+}
+
+/// Reduces a nonnegative tensor modulo 251 and range-checks the residue.
+pub fn add_f251_reduce(graph: &mut Graph, input: (i32, usize), output_shape: &[usize]) -> i32 {
+  let reduce = graph.addBB(Box::new(DivFloorConstBasicBlock { c: 251 }));
+  let reduced = graph.addNode(reduce, vec![input]);
+  add_f251_range_check(graph, (reduced, 1), output_shape);
+  add_f251_range_check(graph, (reduced, 2), output_shape);
+  reduced
+}
+
+/// Constrains a tensor to the canonical F251 representatives `[0, 250]`.
+///
+/// `maximum` must be a verifier-known tensor of 250s with `output_shape`.
+pub fn add_f251_assert(graph: &mut Graph, input: (i32, usize), maximum: (i32, usize), output_shape: &[usize]) {
+  assert!(!output_shape.is_empty());
+  let sub = graph.addBB(Box::new(RepeaterBasicBlock {
+    basic_block: Box::new(SubBasicBlock),
+    N: output_shape.len() - 1,
+  }));
+  let complement = graph.addNode(sub, vec![maximum, input]);
+  add_f251_range_check(graph, input, output_shape);
+  add_f251_range_check(graph, (complement, 0), output_shape);
+}
+
+fn add_f251_range_check(graph: &mut Graph, input: (i32, usize), output_shape: &[usize]) {
+  // Both the residue and `250 - residue` use this lookup. Membership in
+  // [0, 255] for both values therefore proves the tighter interval [0, 250].
+  // The power-of-two table is independent of zkTorch's model quantization
+  // configuration, which is essential for a standalone cuPOW verifier.
+  add_range_check(graph, input, output_shape, 256, CQArrayType::Custom((0..256).map(Fr::from).collect()));
+}
+
 fn add_nonnegative_check(graph: &mut Graph, input: (i32, usize), output_shape: &[usize]) {
   let cq_capacity = util::get_cq_N(&CQArrayType::NonNegative);
+  add_range_check(graph, input, output_shape, cq_capacity, CQArrayType::NonNegative);
+}
+
+fn add_range_check(graph: &mut Graph, input: (i32, usize), output_shape: &[usize], cq_capacity: usize, setup: CQArrayType) {
   let mut padded_shape: Vec<usize> = output_shape.iter().map(|dimension| dimension.next_power_of_two()).collect();
   let last_dimension = padded_shape.last().copied().unwrap_or(1);
   if last_dimension <= cq_capacity {
     let check = graph.addBB(Box::new(RepeaterBasicBlock {
-      basic_block: Box::new(CQBasicBlock {
-        n: last_dimension,
-        setup: CQArrayType::NonNegative,
-      }),
+      basic_block: Box::new(CQBasicBlock { n: last_dimension, setup }),
       N: 1,
     }));
     let _ = graph.addNode(check, vec![input]);
@@ -140,10 +224,7 @@ fn add_nonnegative_check(graph: &mut Graph, input: (i32, usize), output_shape: &
     N: 2,
   }));
   let check = graph.addBB(Box::new(RepeaterBasicBlock {
-    basic_block: Box::new(CQBasicBlock {
-      n: cq_capacity,
-      setup: CQArrayType::NonNegative,
-    }),
+    basic_block: Box::new(CQBasicBlock { n: cq_capacity, setup }),
     N: 1,
   }));
   let check_input = if output_shape.len() == 1 {
@@ -160,12 +241,7 @@ fn add_nonnegative_check(graph: &mut Graph, input: (i32, usize), output_shape: &
   }
 }
 
-pub(crate) fn add_rounded_constant_division(
-  graph: &mut Graph,
-  input: (i32, usize),
-  divisor: u32,
-  output_shape: &[usize],
-) -> i32 {
+pub(crate) fn add_rounded_constant_division(graph: &mut Graph, input: (i32, usize), divisor: u32, output_shape: &[usize]) -> i32 {
   assert_ne!(divisor, 0, "constant division by zero");
   let div = graph.addBB(Box::new(DivConstProofBasicBlock { c: divisor }));
   let output = graph.addNode(div, vec![input]);
@@ -174,13 +250,7 @@ pub(crate) fn add_rounded_constant_division(
   output
 }
 
-pub(crate) fn add_fixed_point_rescale(
-  graph: &mut Graph,
-  input: (i32, usize),
-  input_sf: usize,
-  output_sf: usize,
-  output_shape: &[usize],
-) -> i32 {
+pub(crate) fn add_fixed_point_rescale(graph: &mut Graph, input: (i32, usize), input_sf: usize, output_sf: usize, output_shape: &[usize]) -> i32 {
   assert!(input_sf >= output_sf, "fixed-point rescale only supports reducing the scale");
   let divisor = 1_u32
     .checked_shl((input_sf - output_sf).try_into().expect("fixed-point scale difference is too large"))

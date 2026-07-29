@@ -1,10 +1,8 @@
 # PoComp
 
-This repository implements Pod-PoComp and Task-PoComp from
-[Proofs of Compartmentalization](pocomps.pdf). It provides the protocol types,
-audited ingress/egress gateway, Vast pod lifecycle, zkTorch task proofs, SP1
-relation proofs, and fail-closed bundle verification needed to run the
-documented v1 profile.
+This repository implements two experimental profiles derived from
+[Proofs of Compartmentalization](pocomps.pdf): the original audited-gateway
+Pod/Task profile and a gateway-free cuPOW saturation profile for Vast pods.
 
 ## What is implemented
 
@@ -26,14 +24,25 @@ documented v1 profile.
 - A Task-PoComp orchestrator that derives the sampled statement set and
   generates every sampled zkTorch proof plus the SP1 Task relation proof.
 - Vast pod provisioning and destroy/replace epoch rotation.
+- A gateway-free cuPOW path with signed capacity, contract, challenge, and
+  completion records; pre-challenge hiding KZG workload commitments; exact
+  F251 noising, striped execution, and decoding; and fail-closed zkTorch proof
+  verification.
+- A digest-pinned CUDA cuPOW executor. CUDA is mandatory for an epoch run;
+  failure never selects the CPU correctness oracle.
 
 Vast destroy/replace is useful experimental erasure evidence, but it is **not**
 the paper's physical erasure assumption and therefore only produces
 `Experimental` assurance.
 
+The cuPOW path reports `CalibratedGpuSaturation`. It proves the committed
+arithmetic workload and checks it against an auditor-signed capacity bound. It
+does not prove exclusive Vast hardware, honest calibration, or the absence of
+concurrent work on resources omitted from that calibration.
+
 ## Protocol shape
 
-The v1 task profile is deliberately narrow:
+The gateway task profile is deliberately narrow:
 
 - fixed-shape quantized ONNX with exactly one input and one output;
 - public architecture, tensor shape/quantization specification, proof metadata,
@@ -48,6 +57,10 @@ The v1 task profile is deliberately narrow:
 The public statements and private witnesses are defined in
 [`crates/pocomp-protocol`](crates/pocomp-protocol). The paper-to-code mapping and
 threat model are in [`docs/protocol.md`](docs/protocol.md).
+
+The cuPOW profile uses neither simulated gateways nor SP1. Its relation,
+commitment flow, and operational ordering are in
+[`docs/cupow.md`](docs/cupow.md).
 
 ## Build and test
 
@@ -74,6 +87,7 @@ cargo +nightly-2025-06-30 build --release \
   --bin pocomp_infer \
   --bin pocomp_sanitize_onnx \
   --bin pocomp_verify \
+  --bin pocomp_cupow \
   --bin pocomp_batch_prove
 ```
 
@@ -143,6 +157,11 @@ This signature authenticates the evidence; it does not upgrade
 `VastDestroyReplace` to physical erasure. No experiments are started by
 provisioning.
 
+For a cuPOW epoch, commit the useful workload before requesting the challenge,
+retain the validated CUDA witness, prepare the zkTorch proof, sign a completion
+using the prepared roots, and finalize the statement-bound artifact. See
+[`docs/cupow.md`](docs/cupow.md).
+
 ## Repository layout
 
 ```text
@@ -150,6 +169,8 @@ crates/pocomp-protocol/  Wire types, commitments, sampling, native relations
 crates/pocomp-gateway/   External audited ingress/egress gateway
 crates/pocomp-verifier/  Cryptographic proof composition and assurance
 crates/pocomp-cli/       Native and cryptographic verification CLI
+crates/pocomp-cupow-auditor/ One-use cuPOW challenge/completion service
+crates/pocomp-cupow-runner/ Digest-pinned CUDA epoch runner
 proofs/sp1/              Pinned Pod/Task SP1 guests and host
 proofs/zktorch-committer/ One-use tensor commitments and openings
 third_party/zk-torch/    Pinned, hardened task prover fork

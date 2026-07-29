@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use crate::basic_block::*;
 use crate::util;
-use crate::{CONFIG, LAYER_SETUP_DIR};
+use crate::{ENABLE_LAYER_SETUP, LAYER_SETUP_DIR};
 use ark_bn254::{Bn254, Fr, G1Affine, G1Projective, G2Affine, G2Projective};
 use ark_ec::bn::Bn;
 use ark_ec::pairing::{Pairing, PairingOutput};
@@ -143,7 +143,7 @@ impl Graph {
         }
         println!("setting up {:?} {:?}", i, b);
         let bb_name = format!("{b:?}");
-        let save_cq_layer_setup = CONFIG.prover.enable_layer_setup && (bb_name.contains("CQ2BasicBlock") || bb_name.contains("CQBasicBlock"));
+        let save_cq_layer_setup = *ENABLE_LAYER_SETUP && (bb_name.contains("CQ2BasicBlock") || bb_name.contains("CQBasicBlock"));
         #[cfg(not(feature = "mock_prove"))]
         if save_cq_layer_setup {
           let file_name = format!("{}.setup", util::hash_str(&format!("{bb_name:?}")));

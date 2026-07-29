@@ -4,6 +4,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: &str = "pocomp.v1";
+pub const CUPOW_PROTOCOL_VERSION: &str = "pocomp.cupow.v1";
+pub const CUPOW_ARITHMETIC_PROFILE: &str = "f251-int8-r128.v1";
+pub const CUPOW_TRANSCRIPT_PROFILE: &str = "zktorch-bn254-kzg-row-commitments-v1";
 pub const EXACT_PAIRING_PROGRAM: &str = "exact-one-ingress-one-egress.v1";
 pub const ZKTORCH_VERSION: &str = "63b9c68960f3ca84026d89428dd6d8129e930d53";
 
@@ -292,4 +295,144 @@ pub struct AuditBundle {
     pub pod_relation_proof: ProofArtifact,
     pub task_relation_proof: ProofArtifact,
     pub task_proofs: Vec<TaskProof>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowCapacityCertificate {
+    pub protocol_version: String,
+    pub pod_id: String,
+    pub incarnation_id: String,
+    pub gpu_model: String,
+    pub gpu_count: u32,
+    pub runner_image_digest: String,
+    pub runner_binary_digest: Hash32,
+    pub max_f251_macs_per_second: u64,
+    pub h100e_f251_macs_per_hour: u64,
+    pub valid_from_ns: u64,
+    pub valid_until_ns: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct SignedCuPowCapacityCertificate {
+    pub certificate: CuPowCapacityCertificate,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowPolicy {
+    pub protocol_version: String,
+    pub arithmetic_profile: String,
+    pub transcript_profile: String,
+    pub c_micro_h100_hours: u64,
+    pub min_saturation_ppm: u32,
+    pub matrix_min_n: u32,
+    pub matrix_max_n: u32,
+    pub tile_size: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowWorkItem {
+    pub operation_id: String,
+    pub n: u32,
+    pub left_commitment: Hash32,
+    pub right_commitment: Hash32,
+    pub purpose_digest: Hash32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowWorkloadManifest {
+    pub protocol_version: String,
+    pub workload_id: String,
+    pub items: Vec<CuPowWorkItem>,
+    pub security_work_f251_macs: u128,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowEpoch {
+    pub protocol_version: String,
+    pub epoch_id: String,
+    pub pod_id: String,
+    pub incarnation_id: String,
+    pub opened_at_ns: u64,
+    pub closed_at_ns: u64,
+    pub initial_commitment: Hash32,
+    pub workload_commitment: Hash32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowContract {
+    pub protocol_version: String,
+    pub policy: CuPowPolicy,
+    pub epoch: CuPowEpoch,
+    pub capacity: SignedCuPowCapacityCertificate,
+    pub manifest: CuPowWorkloadManifest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct SignedCuPowContract {
+    pub contract: CuPowContract,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowChallenge {
+    pub protocol_version: String,
+    pub epoch_id: String,
+    pub contract_digest: Hash32,
+    pub seed: Hash32,
+    pub issued_at_ns: u64,
+    pub deadline_ns: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct SignedCuPowChallenge {
+    pub challenge: CuPowChallenge,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowCompletion {
+    pub protocol_version: String,
+    pub epoch_id: String,
+    pub challenge_digest: Hash32,
+    pub transcript_root: Hash32,
+    pub output_root: Hash32,
+    pub security_work_f251_macs: u128,
+    pub completed_at_ns: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct SignedCuPowCompletion {
+    pub completion: CuPowCompletion,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowPublicStatement {
+    pub protocol_version: String,
+    pub contract: SignedCuPowContract,
+    pub challenge: SignedCuPowChallenge,
+    pub completion: SignedCuPowCompletion,
+    pub erasure: SignedErasureCertificate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub enum CuPowAssurance {
+    CalibratedGpuSaturation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowOutcome {
+    pub relation_satisfied: bool,
+    pub assurance: CuPowAssurance,
+    pub security_work_f251_macs: u128,
+    pub certified_capacity_f251_macs: u128,
+    pub saturation_ppm: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CuPowBundle {
+    pub protocol_version: String,
+    pub statement: CuPowPublicStatement,
+    pub proof: ProofArtifact,
 }

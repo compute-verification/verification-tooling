@@ -1,7 +1,10 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::{Direction, GatewayLeaf, Hash32, TaskProgram};
+use crate::{
+    CuPowChallenge, CuPowContract, CuPowWorkloadManifest, Direction, GatewayLeaf, Hash32,
+    TaskProgram,
+};
 
 const HASH_DOMAIN: &[u8] = b"pocomp/hash/v1";
 const COMMITMENT_DOMAIN: &[u8] = b"pocomp/commitment/v1";
@@ -11,6 +14,10 @@ const EMPTY_ROOT_DOMAIN: &[u8] = b"pocomp/merkle-empty/v1";
 const EMPTY_AUX_DOMAIN: &[u8] = b"pocomp/empty-aux/v1";
 const TASK_PROGRAM_DOMAIN: &[u8] = b"pocomp/task-program/v1";
 const TASK_ARTIFACT_DOMAIN: &[u8] = b"pocomp/task-artifact/v1";
+const CUPOW_WORKLOAD_DOMAIN: &[u8] = b"pocomp/cupow/workload/v1";
+const CUPOW_CONTRACT_DOMAIN: &[u8] = b"pocomp/cupow/contract/v1";
+const CUPOW_CHALLENGE_DOMAIN: &[u8] = b"pocomp/cupow/challenge/v1";
+const CUPOW_KZG_MATRIX_DOMAIN: &[u8] = b"pocomp/cupow/kzg-matrix-commitment/v1";
 
 /// Serializes a protocol value using the canonical wire encoding.
 ///
@@ -58,6 +65,43 @@ pub fn task_artifact_id(epoch_id: &str, task_id: &str, direction: Direction) -> 
         TASK_ARTIFACT_DOMAIN,
         &canonical_bytes(&(epoch_id, task_id, direction)),
     )
+}
+
+#[must_use]
+pub fn cupow_workload_commitment(manifest: &CuPowWorkloadManifest) -> Hash32 {
+    domain_hash(CUPOW_WORKLOAD_DOMAIN, &canonical_bytes(manifest))
+}
+
+#[must_use]
+pub fn cupow_contract_digest(contract: &CuPowContract) -> Hash32 {
+    domain_hash(CUPOW_CONTRACT_DOMAIN, &canonical_bytes(contract))
+}
+
+#[must_use]
+pub fn cupow_challenge_digest(challenge: &CuPowChallenge) -> Hash32 {
+    domain_hash(CUPOW_CHALLENGE_DOMAIN, &canonical_bytes(challenge))
+}
+
+#[must_use]
+/// Digests the public compressed KZG commitment for every matrix row.
+///
+/// # Panics
+///
+/// Panics when the number of row commitments does not match `rows`.
+pub fn cupow_kzg_matrix_commitment(
+    rows: u32,
+    columns: u32,
+    row_commitments: &[[u8; 32]],
+) -> Hash32 {
+    assert_eq!(row_commitments.len(), rows as usize);
+    let mut bytes = Vec::with_capacity(16 + row_commitments.len() * 32);
+    bytes.extend_from_slice(&rows.to_be_bytes());
+    bytes.extend_from_slice(&columns.to_be_bytes());
+    bytes.extend_from_slice(&(row_commitments.len() as u64).to_be_bytes());
+    for commitment in row_commitments {
+        bytes.extend_from_slice(commitment);
+    }
+    domain_hash(CUPOW_KZG_MATRIX_DOMAIN, &bytes)
 }
 
 fn leaf_hash(leaf: &GatewayLeaf) -> Hash32 {

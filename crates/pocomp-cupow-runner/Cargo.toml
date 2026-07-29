@@ -1,0 +1,13 @@
+[package]
+name = "pocomp-cupow-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+hex.workspace = true
+pocomp-protocol = { path = "../pocomp-protocol" }
+serde.workspace = true
+serde_json.workspace = true

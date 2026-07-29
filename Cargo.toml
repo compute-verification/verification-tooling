@@ -3,6 +3,8 @@ members = [
     "crates/pocomp-protocol",
     "crates/pocomp-cli",
     "crates/pocomp-gateway",
+    "crates/pocomp-cupow-auditor",
+    "crates/pocomp-cupow-runner",
     "crates/pocomp-verifier",
 ]
 resolver = "2"

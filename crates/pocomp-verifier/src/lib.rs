@@ -6,9 +6,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use pocomp_protocol::{
-    commitment, verify_audit_contract_signature, verify_erasure_certificate_signature,
-    verify_gateway_root_signature, Assurance, AuditBundle, ErasureKind, Hash32, ProofArtifact,
-    TaskProof, ZkTorchStatement, PROTOCOL_VERSION,
+    commitment, evaluate_cupow_relation, verify_audit_contract_signature,
+    verify_cupow_capacity_signature, verify_cupow_challenge_signature,
+    verify_cupow_completion_signature, verify_cupow_contract_signature,
+    verify_erasure_certificate_signature, verify_gateway_root_signature, Assurance, AuditBundle,
+    CuPowAssurance, CuPowBundle, ErasureKind, Hash32, ProofArtifact, TaskProof, ZkTorchStatement,
+    CUPOW_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -17,6 +20,8 @@ pub const SP1_BACKEND: &str = "sp1";
 pub const SP1_VERSION: &str = "v6.2.2+150e6294959f40dbc3ba42eb21c8eccc14c95bc5";
 pub const ZKTORCH_BACKEND: &str = "zk-torch";
 pub const ZKTORCH_VERSION: &str = "63b9c68960f3ca84026d89428dd6d8129e930d53";
+pub const CUPOW_ZKTORCH_BACKEND: &str = "zk-torch-cupow";
+pub const CUPOW_ZKTORCH_VERSION: &str = "63b9c68960f3ca84026d89428dd6d8129e930d53+cupow-v1";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct VerifyRequest<'a> {
@@ -73,6 +78,17 @@ impl ExternalProofVerifier {
                 zktorch.into(),
             ),
         ]))
+    }
+
+    #[must_use]
+    pub fn cupow(zktorch: impl Into<PathBuf>) -> Self {
+        Self::new(BTreeMap::from([(
+            (
+                CUPOW_ZKTORCH_BACKEND.to_owned(),
+                CUPOW_ZKTORCH_VERSION.to_owned(),
+            ),
+            zktorch.into(),
+        )]))
     }
 
     fn invoke(path: &Path, request: &VerifyRequest<'_>) -> Result<VerifyResponse, VerifyError> {
@@ -173,6 +189,16 @@ pub enum VerifyError {
     ProofRejected,
     #[error("sampled task proof set does not match the public task statement")]
     TaskProofSet,
+    #[error("cuPOW public relation is invalid")]
+    CuPowRelation,
+    #[error("cuPOW capacity certificate signature is invalid")]
+    CuPowCapacitySignature,
+    #[error("cuPOW contract signature is invalid")]
+    CuPowContractSignature,
+    #[error("cuPOW challenge signature is invalid")]
+    CuPowChallengeSignature,
+    #[error("cuPOW completion receipt signature is invalid")]
+    CuPowCompletionSignature,
 }
 
 fn validate_artifact(
@@ -281,6 +307,49 @@ pub fn verify_audit_bundle(
     } else {
         Assurance::Experimental
     })
+}
+
+/// Verifies a gateway-free cuPOW saturation bundle.
+///
+/// # Errors
+///
+/// Returns an error for any invalid signature, public relation, artifact binding,
+/// unavailable proof backend, or rejected zkTorch proof.
+pub fn verify_cupow_bundle(
+    bundle: &CuPowBundle,
+    auditor_public_key: &[u8; 32],
+    verifier: &impl ProofVerifier,
+) -> Result<CuPowAssurance, VerifyError> {
+    if bundle.protocol_version != CUPOW_PROTOCOL_VERSION
+        || bundle.statement.protocol_version != CUPOW_PROTOCOL_VERSION
+    {
+        return Err(VerifyError::ProtocolVersion);
+    }
+    let statement = &bundle.statement;
+    if !verify_cupow_capacity_signature(&statement.contract.contract.capacity, auditor_public_key) {
+        return Err(VerifyError::CuPowCapacitySignature);
+    }
+    if !verify_cupow_contract_signature(&statement.contract, auditor_public_key) {
+        return Err(VerifyError::CuPowContractSignature);
+    }
+    if !verify_cupow_challenge_signature(&statement.challenge, auditor_public_key) {
+        return Err(VerifyError::CuPowChallengeSignature);
+    }
+    if !verify_cupow_completion_signature(&statement.completion, auditor_public_key) {
+        return Err(VerifyError::CuPowCompletionSignature);
+    }
+    if !verify_erasure_certificate_signature(&statement.erasure, auditor_public_key) {
+        return Err(VerifyError::ErasureSignature);
+    }
+    let outcome = evaluate_cupow_relation(statement).map_err(|_| VerifyError::CuPowRelation)?;
+    verifier.verify(
+        &bundle.proof,
+        CUPOW_ZKTORCH_BACKEND,
+        CUPOW_ZKTORCH_VERSION,
+        commitment(statement),
+        serde_json::to_value(statement).map_err(|_| VerifyError::BackendProtocol)?,
+    )?;
+    Ok(outcome.assurance)
 }
 
 #[cfg(test)]

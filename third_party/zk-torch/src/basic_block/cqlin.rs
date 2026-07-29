@@ -56,21 +56,12 @@ struct CQLinSetupCommon {
 
 type CQLinSetupCacheKey = (Vec<u8>, usize, usize, usize);
 
-static CQLIN_SETUP_CACHE: Lazy<Mutex<HashMap<CQLinSetupCacheKey, Arc<CQLinSetupCommon>>>> =
-  Lazy::new(|| Mutex::new(HashMap::new()));
+static CQLIN_SETUP_CACHE: Lazy<Mutex<HashMap<CQLinSetupCacheKey, Arc<CQLinSetupCommon>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn cqlin_setup_cache_key(srs: &SRS, m: usize, n: usize) -> CQLinSetupCacheKey {
   let mut fingerprint = Vec::new();
-  srs.X1P
-    .get(1)
-    .unwrap_or(&srs.X1P[0])
-    .serialize_compressed(&mut fingerprint)
-    .expect("serialize CQLin G1 SRS fingerprint");
-  srs.X2P
-    .get(1)
-    .unwrap_or(&srs.X2P[0])
-    .serialize_compressed(&mut fingerprint)
-    .expect("serialize CQLin G2 SRS fingerprint");
+  srs.X1P.get(1).unwrap_or(&srs.X1P[0]).serialize_compressed(&mut fingerprint).expect("serialize CQLin G1 SRS fingerprint");
+  srs.X2P.get(1).unwrap_or(&srs.X2P[0]).serialize_compressed(&mut fingerprint).expect("serialize CQLin G2 SRS fingerprint");
   (fingerprint, srs.X2P.len() - 1, m, n)
 }
 
@@ -561,8 +552,7 @@ impl BasicBlock for CQLinBasicBlock {
     let R: Vec<Vec<_>> = (0..m).into_par_iter().map(|i| (0..n).map(|j| common.U[i][j] * model[i].raw[j]).collect()).collect();
     let R: Vec<_> = R.par_iter().map(|x| x.iter().sum::<G1Projective>()).collect();
 
-    let P_R: Vec<Vec<_>> =
-      (0..m).into_par_iter().map(|i| (0..n).map(|j| common.U_P_R[i][j] * model[i].raw[j]).collect()).collect();
+    let P_R: Vec<Vec<_>> = (0..m).into_par_iter().map(|i| (0..n).map(|j| common.U_P_R[i][j] * model[i].raw[j]).collect()).collect();
     let mut P_R: Vec<_> = P_R.par_iter().map(|x| x.iter().sum::<G1Projective>()).collect();
 
     // Calculate C for Q
@@ -572,15 +562,13 @@ impl BasicBlock for CQLinBasicBlock {
     // Calculate Q. The C above corresponds to the C in the cqlin paper
     C.par_iter_mut().for_each(|x| x.append(&mut vec![Fr::zero(); m]));
     C.par_iter_mut().for_each(|x| domain_2m.fft_in_place(x));
-    let temp: Vec<Vec<_>> =
-      (0..2 * m).into_par_iter().map(|i| (0..n).map(|j| common.srs_star[j][i] * C[j][i]).collect()).collect();
+    let temp: Vec<Vec<_>> = (0..2 * m).into_par_iter().map(|i| (0..n).map(|j| common.srs_star[j][i] * C[j][i]).collect()).collect();
     let mut temp: Vec<_> = temp.par_iter().map(|x| x.iter().sum::<G1Projective>()).collect();
     util::ifft_in_place(domain_2m, &mut temp);
     let mut temp = temp[m..].to_vec();
     util::fft_in_place(domain_m, &mut temp);
     let mut Q: Vec<_> = (0..m).into_par_iter().map(|i| temp[i] * domain_m.element(i) * m_inv).collect();
-    let M_x =
-      (0..m).into_par_iter().map(|i| (0..n).map(|j| common.U2[i][j] * model[i].raw[j]).sum::<G2Projective>()).sum::<G2Projective>(); // TODO: Change to msm
+    let M_x = (0..m).into_par_iter().map(|i| (0..n).map(|j| common.U2[i][j] * model[i].raw[j]).sum::<G2Projective>()).sum::<G2Projective>(); // TODO: Change to msm
 
     let mut setup = R;
     setup.append(&mut Q);

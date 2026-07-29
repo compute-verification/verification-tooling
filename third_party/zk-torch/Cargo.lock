@@ -1314,11 +1314,14 @@ checksum = "b16136f5f3019c1e83035af76cccddd56d789a5e2933306270185c3f99f12259"
 name = "pocomp-protocol"
 version = "0.1.0"
 dependencies = [
+ "ark-bn254",
+ "ark-ff",
  "ed25519-dalek",
  "hex",
  "postcard",
  "serde",
  "sha2",
+ "sha3",
  "thiserror",
 ]
 
@@ -2367,6 +2370,7 @@ dependencies = [
  "icicle-core",
  "icicle-cuda-runtime",
  "itertools 0.13.0",
+ "libc",
  "log",
  "ndarray",
  "once_cell",

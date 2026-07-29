@@ -119,8 +119,7 @@ impl Layer for MultiHeadMatMulLayer {
       input_shapes: vec![unsq_shape; util::next_pow(output_shape[output_shape.len() - 2] as u32) as usize],
     }));
     let multihead_output = graph.addNode(concat, inputs_to_concat);
-    let change_SF_output =
-      super::add_fixed_point_rescale(&mut graph, (multihead_output, 0), sf_log * 2, sf_log, &output_shape);
+    let change_SF_output = super::add_fixed_point_rescale(&mut graph, (multihead_output, 0), sf_log * 2, sf_log, &output_shape);
     graph.outputs.push((change_SF_output, 0));
 
     (graph, vec![output_shape], vec![input_types[0]])
