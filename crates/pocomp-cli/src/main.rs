@@ -6,13 +6,14 @@ use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use pocomp_protocol::{
     commitment, cupow_challenge_digest, cupow_contract_digest, empty_aux_commitment,
-    evaluate_pod_relation, evaluate_task_relation, sampled_zktorch_statements, sign_audit_contract,
-    sign_cupow_capacity, sign_cupow_challenge, sign_cupow_completion, sign_cupow_contract,
-    sign_erasure_certificate, task_artifact_id, task_program_commitment,
-    verify_cupow_challenge_signature, verify_cupow_contract_signature, AuditBundle, AuditContract,
-    CuPowBundle, CuPowCapacityCertificate, CuPowChallenge, CuPowCompletion, CuPowContract,
-    Direction, ErasureCertificate, Hash32, PodRelationInput, SignedCuPowChallenge,
-    SignedCuPowContract, TaskProgram, TaskRelationInput, ZkTorchStatement, CUPOW_PROTOCOL_VERSION,
+    evaluate_cupow_relation, evaluate_pod_relation, evaluate_task_relation,
+    sampled_zktorch_statements, sign_audit_contract, sign_cupow_capacity, sign_cupow_challenge,
+    sign_cupow_completion, sign_cupow_contract, sign_erasure_certificate, task_artifact_id,
+    task_program_commitment, verify_cupow_challenge_signature, verify_cupow_contract_signature,
+    AuditBundle, AuditContract, CuPowBundle, CuPowCapacityCertificate, CuPowChallenge,
+    CuPowCompletion, CuPowContract, CuPowPublicStatement, Direction, ErasureCertificate, Hash32,
+    PodRelationInput, SignedCuPowChallenge, SignedCuPowContract, TaskProgram, TaskRelationInput,
+    ZkTorchStatement, CUPOW_PROTOCOL_VERSION,
 };
 use pocomp_verifier::{verify_audit_bundle, verify_cupow_bundle, ExternalProofVerifier};
 
@@ -32,11 +33,17 @@ enum Command {
     VerifyTask {
         input: PathBuf,
     },
+    VerifyCupow {
+        input: PathBuf,
+    },
     PrepareTask {
         input: PathBuf,
         output: PathBuf,
     },
     DigestZktorch {
+        input: PathBuf,
+    },
+    DigestFile {
         input: PathBuf,
     },
     TaskArtifactId {
@@ -45,6 +52,9 @@ enum Command {
         direction: String,
     },
     TaskProgramCommitment {
+        input: PathBuf,
+    },
+    CupowWorkloadCommitment {
         input: PathBuf,
     },
     EmptyAuxCommitment,
@@ -177,6 +187,10 @@ fn main() -> Result<()> {
             let outcome = evaluate_task_relation(&read_json::<TaskRelationInput>(&input)?)?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);
         }
+        Command::VerifyCupow { input } => {
+            let outcome = evaluate_cupow_relation(&read_json::<CuPowPublicStatement>(&input)?)?;
+            println!("{}", serde_json::to_string_pretty(&outcome)?);
+        }
         Command::PrepareTask { input, output } => {
             let mut relation = read_json::<TaskRelationInput>(&input)?;
             if !relation.sampled_statements.is_empty() {
@@ -193,6 +207,10 @@ fn main() -> Result<()> {
         }
         Command::DigestZktorch { input } => {
             println!("{}", commitment(&read_json::<ZkTorchStatement>(&input)?));
+        }
+        Command::DigestFile { input } => {
+            let bytes = fs::read(&input).with_context(|| format!("reading {}", input.display()))?;
+            println!("{}", pocomp_protocol::hash_bytes(&bytes));
         }
         Command::TaskArtifactId {
             epoch_id,
@@ -213,6 +231,14 @@ fn main() -> Result<()> {
             println!(
                 "{}",
                 task_program_commitment(&read_json::<TaskProgram>(&input)?)
+            );
+        }
+        Command::CupowWorkloadCommitment { input } => {
+            println!(
+                "{}",
+                pocomp_protocol::cupow_workload_commitment(&read_json::<
+                    pocomp_protocol::CuPowWorkloadManifest,
+                >(&input)?)
             );
         }
         Command::EmptyAuxCommitment => println!("{}", empty_aux_commitment()),

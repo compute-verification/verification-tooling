@@ -37,6 +37,12 @@ struct PreparedProof {
   proof_bytes: Vec<u8>,
 }
 
+#[derive(Serialize)]
+struct PreparedRoots {
+  transcript_root: Hash32,
+  output_root: Hash32,
+}
+
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> T {
   serde_json::from_slice(&fs::read(path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display())))
     .unwrap_or_else(|error| panic!("parsing {}: {error}", path.display()))
@@ -106,6 +112,19 @@ fn finalize(args: &[String]) {
   serde_json::to_writer(file, &artifact).expect("write proof artifact");
 }
 
+fn prepared_roots(args: &[String]) {
+  assert_eq!(args.len(), 2, "usage: pocomp_cupow prepared-roots <prepared-proof.bin>",);
+  let prepared: PreparedProof = bincode::deserialize(&fs::read(&args[1]).expect("read prepared proof")).expect("decode prepared proof");
+  println!(
+    "{}",
+    serde_json::to_string_pretty(&PreparedRoots {
+      transcript_root: prepared.transcript_root,
+      output_root: prepared.output_root,
+    })
+    .expect("encode prepared roots"),
+  );
+}
+
 fn commit(args: &[String]) {
   assert_eq!(
     args.len(),
@@ -151,8 +170,9 @@ fn main() {
   match args.first().map(String::as_str) {
     Some("commit") => commit(&args),
     Some("prove") => prove(&args),
+    Some("prepared-roots") => prepared_roots(&args),
     Some("finalize") => finalize(&args),
     Some("verify-json") if args.len() == 1 => verify_json(),
-    _ => panic!("expected `commit`, `prove`, `finalize`, or `verify-json`"),
+    _ => panic!("expected `commit`, `prove`, `prepared-roots`, `finalize`, or `verify-json`"),
   }
 }

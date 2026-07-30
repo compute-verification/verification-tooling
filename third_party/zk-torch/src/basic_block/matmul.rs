@@ -16,7 +16,7 @@ use ark_serialize::CanonicalSerialize;
 use ark_std::{ops::Mul, ops::Sub, One, UniformRand, Zero};
 use ndarray::{arr1, arr2, ArrayD, Ix1, Ix2, IxDyn};
 use rand::{rngs::StdRng, SeedableRng};
-use rayon::iter::ParallelIterator;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 define_acc_terms!(
   MatMulG1Terms,
@@ -330,6 +330,31 @@ impl BasicBlock for MatMulBasicBlock {
     let b = inputs[1].view().into_dimensionality::<Ix2>().unwrap();
     let m = b.shape()[0];
     let n = b.shape()[1];
+    assert!(n <= u64::MAX as usize / (250 * 250), "F251 scalar product exceeds u64",);
+    let f251_inputs = inputs
+      .iter()
+      .map(|input| input.iter().map(|value| u64::try_from(util::fr_to_int(*value)).ok().filter(|value| *value < 251)).collect::<Option<Vec<_>>>())
+      .collect::<Option<Vec<_>>>();
+    if let Some(f251_inputs) = f251_inputs {
+      let left = &f251_inputs[0];
+      let right = &f251_inputs[1];
+      if inputs[0].ndim() == 1 {
+        let output = (0..m)
+          .into_par_iter()
+          .map(|row| Fr::from((0..n).map(|column| left[column] * right[row * n + column]).sum::<u64>()))
+          .collect::<Vec<_>>();
+        return Ok(vec![arr1(&output).into_dyn()]);
+      }
+      let rows = inputs[0].shape()[0];
+      let output = (0..rows * m)
+        .into_par_iter()
+        .map(|index| {
+          let (left_row, right_row) = (index / m, index % m);
+          Fr::from((0..n).map(|column| left[left_row * n + column] * right[right_row * n + column]).sum::<u64>())
+        })
+        .collect::<Vec<_>>();
+      return Ok(vec![ArrayD::from_shape_vec(vec![rows, m], output).unwrap()]);
+    }
     if inputs[0].ndim() == 1 {
       let a = inputs[0].view().into_dimensionality::<Ix1>().unwrap();
       let idx_arr = (0..m).collect::<Vec<_>>();

@@ -11,6 +11,7 @@ use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
 static ECNTT_DOMAIN_SIZE: Lazy<Mutex<Option<usize>>> = Lazy::new(|| Mutex::new(None));
+static MSM_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 extern "C" {
   #[link_name = "bn254ECNTTCuda"]
@@ -32,6 +33,7 @@ pub(crate) fn msm_g1(bases: &[ArkG1Affine], scalars: &[Fr]) -> ArkG1Projective {
   if scalars.is_empty() {
     return ArkG1Projective::default();
   }
+  let _lock = MSM_LOCK.lock().expect("ICICLE MSM lock poisoned");
   let points = HostOrDeviceSlice::on_host(bases[..scalars.len()].iter().copied().map(G1Affine::from_ark).collect());
   let scalars = HostOrDeviceSlice::on_host(convert_scalars(scalars));
   let mut output = HostOrDeviceSlice::on_host(vec![G1Projective::zero()]);
@@ -50,6 +52,7 @@ pub(crate) fn msm_g2(bases: &[ArkG2Affine], scalars: &[Fr]) -> ArkG2Projective {
   if scalars.is_empty() {
     return ArkG2Projective::default();
   }
+  let _lock = MSM_LOCK.lock().expect("ICICLE MSM lock poisoned");
   let points = HostOrDeviceSlice::on_host(bases[..scalars.len()].iter().copied().map(G2Affine::from_ark).collect());
   let scalars = HostOrDeviceSlice::on_host(convert_scalars(scalars));
   let mut output = HostOrDeviceSlice::on_host(vec![G2Projective::zero()]);
